@@ -1,0 +1,6 @@
+# SetuHaul operating constants (15 / 10 / 4h / 3) — RUNBOOK.md Step 6
+version: "1.0.0"
+eta_buffer_minutes: 15 # F1: span_start >= effective_eta + 15 min
+escalation_acknowledge_minutes: 10 # acknowledge_due_at = created + 10 min
+search_band_hours: 4 # relevance band: ETA+15min -> ETA+4h
+max_options_returned: 3

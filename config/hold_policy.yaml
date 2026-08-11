@@ -1,0 +1,17 @@
+# SetuHaul hold TTL policy — §5 of AGENT_BRIEF.md
+version: "1.0.0"
+mode: "adaptive"
+fixed_ttl_seconds: 180 # only used when mode = fixed
+
+# R = competing trucks / available slot-units over the 4-hour band
+bands:
+  - max_ratio: 0.8
+    ttl_seconds: 300
+  - max_ratio: 1.5
+    ttl_seconds: 180
+  - max_ratio: null
+    ttl_seconds: 90
+
+floor_seconds: 60
+ceiling_seconds: 600
+max_extensions: 1

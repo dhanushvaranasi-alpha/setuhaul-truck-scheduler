@@ -1,0 +1,28 @@
+# SetuHaul allocation scoring policy — §4 of AGENT_BRIEF.md
+# Reference implementation: score_final.py
+version: "1.0.0"
+approved_by: "Dhanush Varanasi"
+
+importance_points:
+  CRITICAL: 9.0
+  HIGH: 6.0
+  NORMAL: 3.0
+  LOW: 0.0
+
+waiting_linear: 1.5
+waiting_quadratic: 0.6
+facility_at_fault: 2.5
+perishable: 2.0
+hours_past_booked_slot: 0.5
+
+eta_uncertainty:
+  HIGH: 0.0
+  MEDIUM: -0.75
+  LOW: -1.5
+
+carrier_fairness_per_contested_win: -0.4
+
+tie_break:
+  - hold_created_at
+  - gate_in_ts
+  - shipment_id

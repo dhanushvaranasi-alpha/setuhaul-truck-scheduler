@@ -1,0 +1,8 @@
+# SetuHaul reschedule policy — designed, not built (cut per RUNBOOK.md
+# "If you fall behind"). Loaded and validated like the other policies so
+# the config-loading invariant (I10) holds even for unbuilt features;
+# `enabled: false` means no code path currently consults these values.
+version: "1.0.0"
+enabled: false
+max_reschedules_per_shipment: 1
+min_notice_minutes: 30

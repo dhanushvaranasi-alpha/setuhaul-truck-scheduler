@@ -1,0 +1,136 @@
+from typing import Literal, Union
+
+from pydantic import BaseModel
+
+# --------------------------------------------------------------------------
+# Tool results — every tool returns one of these. The LLM reads `status`
+# first (always a Literal) and branches on it.
+# --------------------------------------------------------------------------
+
+
+class FeasibleSpan(BaseModel):
+    option_token: str
+    dock_id: str
+    dock_code: str
+    span_start: str  # ISO-8601 with +05:30
+    span_end: str
+
+
+class Booked(BaseModel):
+    status: Literal["booked"]
+    appointment_id: str
+    dock_code: str
+    span_start: str  # ISO-8601 with +05:30
+    span_end: str
+    warehouse_notified: bool
+
+
+class Rejected(BaseModel):
+    status: Literal["rejected"]
+    reason: str  # one of the reason codes from §3
+    detail: str | None = None  # plain English for the LLM to phrase to the driver
+
+
+class LostRace(BaseModel):
+    status: Literal["lost_race"]
+    message: str  # "that slot went 30 seconds ago"
+    alternatives: list[FeasibleSpan]  # next feasible options already fetched
+
+
+class Escalated(BaseModel):
+    status: Literal["escalated"]
+    escalation_id: str
+    reason_code: str
+    assigned_to: str
+    update_by: str  # committed time to tell the driver
+
+
+class Options(BaseModel):
+    status: Literal["options"]
+    spans: list[FeasibleSpan]  # up to 3
+    searched_until: str  # how far the ladder searched
+
+
+class HoldConfirmed(BaseModel):
+    status: Literal["held"]
+    hold_group_id: str
+    expires_at: str  # absolute ISO-8601 — tell the driver this time
+    ttl_seconds: int
+    contention_ratio: float
+
+
+ToolResult = Union[Booked, Rejected, LostRace, Escalated, Options, HoldConfirmed]
+
+
+# --------------------------------------------------------------------------
+# Option tokens — signed with HMAC, carried opaquely by the conversation
+# layer between find_feasible_slots and hold_slot.
+# --------------------------------------------------------------------------
+
+
+class OptionToken(BaseModel):
+    span_slot_ids: list[str]
+    shipment_id: str
+    state_hash: str
+    issued_at: str
+    signature: str
+
+
+# --------------------------------------------------------------------------
+# Policy configs — loaded from versioned YAML at startup (I10). A bad
+# weight or missing field must fail immediately, not silently at decision
+# time.
+# --------------------------------------------------------------------------
+
+
+class AllocationPolicy(BaseModel):
+    version: str
+    approved_by: str
+    importance_points: dict[Literal["CRITICAL", "HIGH", "NORMAL", "LOW"], float]
+    waiting_linear: float  # per hour of INVOLUNTARY waiting (I9)
+    waiting_quadratic: float  # anti-starvation
+    facility_at_fault: float  # queue_state = WAITING_DOCK_UNAVAILABLE
+    perishable: float
+    hours_past_booked_slot: float
+    eta_uncertainty: dict[Literal["HIGH", "MEDIUM", "LOW"], float]
+    carrier_fairness_per_contested_win: float  # suppressed when facility_at_fault
+    tie_break: list[str]
+
+
+class AllocationBand(BaseModel):
+    max_ratio: float | None  # None = catch-all
+    ttl_seconds: int
+
+
+class HoldPolicy(BaseModel):
+    version: str
+    mode: Literal["adaptive", "fixed"]
+    fixed_ttl_seconds: int
+    bands: list[AllocationBand]
+    floor_seconds: int
+    ceiling_seconds: int
+    max_extensions: int
+
+
+class PendingConfirmationPolicy(BaseModel):
+    version: str
+    delivered_expiry_minutes: int  # booked_at + this, capped by pre_span_buffer
+    pre_span_buffer_minutes: int  # never expire later than span_start - this
+    queued_timeout_seconds: int  # QUEUED beyond this is treated as a failure
+    retry_attempts: int
+    channel_ladder: list[str]  # e.g. ["EMAIL", "SMS"]
+
+
+class ReschedulePolicy(BaseModel):
+    version: str
+    enabled: bool
+    max_reschedules_per_shipment: int
+    min_notice_minutes: int
+
+
+class OperatingConstants(BaseModel):
+    version: str
+    eta_buffer_minutes: int  # F1: span_start >= effective_eta + this
+    escalation_acknowledge_minutes: int  # acknowledge_due_at = created + this
+    search_band_hours: int  # relevance band width: ETA+buffer -> ETA+this
+    max_options_returned: int  # find_feasible_slots returns up to this many

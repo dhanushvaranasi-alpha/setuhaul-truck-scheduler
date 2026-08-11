@@ -1,0 +1,16 @@
+# SetuHaul pending-confirmation expiry policy — §7 of AGENT_BRIEF.md
+version: "1.0.0"
+
+# delivered (DELIVERED or SENT) -> expire at
+#   min(booked_at + delivered_expiry_minutes, span_start - pre_span_buffer_minutes)
+delivered_expiry_minutes: 20
+pre_span_buffer_minutes: 30
+
+# FAILED, or QUEUED beyond this many seconds -> treat as a failure
+# (do NOT run a clock; nobody replies to a message that never left)
+queued_timeout_seconds: 120
+
+retry_attempts: 1
+channel_ladder:
+  - EMAIL
+  - SMS
