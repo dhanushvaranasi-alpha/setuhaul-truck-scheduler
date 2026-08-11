@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.2
+    hooks:
+      - id: ruff
+        args: [--select, DTZ]
+
+  - repo: local
+    hooks:
+      - id: no-naive-clock-calls
+        name: no datetime.now()/time.time() outside clock.py
+        entry: bash -c '! grep -rn "datetime\.now()\|time\.time()" src/ --exclude=clock.py'
+        language: system
+        pass_filenames: false

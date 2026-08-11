@@ -1,3 +1,11 @@
+# Planning and agent documents — not application code
+CODING_AGENT_PROMPT.md
+AGENT_BRIEF.md
+DECISIONS.md
+SetuHaul_Design_Doc.md
+RUNBOOK.md
+TOOLS.md
+
 # Environment variables
 .env
 .env.local
