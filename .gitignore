@@ -6,20 +6,38 @@ SetuHaul_Design_Doc.md
 RUNBOOK.md
 TOOLS.md
 
+# Build tools — used to generate the database, not part of the app
+migrate_grid.py
+generate_seed.py
+build_db.py
+
 # Environment variables
 .env
 .env.local
 .env.*.local
 
-# OS
-.DS_Store
-
-# Editor
-.vscode/
-.idea/
-
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+.ruff_cache/
+.mypy_cache/
 .pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
 
+# SQL and DB files — keep in docs, not in repo
+*.db
+seed_data.sql
+migration.sql
+schema_postgres.sql
+
+# Vercel
+.vercel/
+
+# OS
+.DS_Store
+Thumbs.db
