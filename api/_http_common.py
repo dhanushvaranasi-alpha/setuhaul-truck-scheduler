@@ -28,6 +28,8 @@ def json_get_handler(fn):
                 _send_json(self, 200, result)
             except LookupError as e:
                 _send_json(self, 400, {"error": str(e)})
+            except PermissionError as e:
+                _send_json(self, 403, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 — surface to the client, this is a JSON API boundary
                 _send_json(self, 500, {"error": str(e)})
 
@@ -47,6 +49,8 @@ def json_post_handler(fn):
                 _send_json(self, 200, result)
             except LookupError as e:
                 _send_json(self, 400, {"error": str(e)})
+            except PermissionError as e:
+                _send_json(self, 403, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 — surface to the client, this is a JSON API boundary
                 _send_json(self, 500, {"error": str(e)})
 
