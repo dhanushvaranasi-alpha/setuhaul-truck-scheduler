@@ -3,7 +3,7 @@ import uuid
 from datetime import timedelta
 from typing import Literal
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables.config import ensure_config
 from langchain_core.tools import tool
 
 from . import db
@@ -18,16 +18,23 @@ from .core.tokens import verify_option_token
 from .models import Rejected
 
 # --------------------------------------------------------------------------
-# I11: no tool accepts driver_id. It comes from the session (RunnableConfig,
-# injected by LangChain — never exposed in the tool schema the LLM sees).
-# Every tool that touches a shipment/thread validates ownership here first;
-# violations are logged to agent_actions with status REJECTED and never
-# reach the deterministic core.
+# I11: no tool accepts driver_id. It comes from the session — never exposed
+# in the tool schema the LLM sees. Every tool that touches a shipment/thread
+# validates ownership here first; violations are logged to agent_actions
+# with status REJECTED and never reach the deterministic core.
+#
+# Session identity is read via ensure_config(), not a `config:
+# RunnableConfig` function parameter. AgentExecutor's tool-calling loop
+# (_perform_agent_action -> tool.run()) never passes a `config` kwarg, and
+# BaseTool.run() unconditionally overwrites any declared config-typed
+# parameter with that (missing => None) value — verified against the
+# installed langchain-core source. It does, however, correctly set the
+# ambient contextvar via set_config_context(), which ensure_config() reads.
 # --------------------------------------------------------------------------
 
 
-def _session(config: RunnableConfig) -> tuple[str, str]:
-    cfg = config["configurable"]
+def _session() -> tuple[str, str]:
+    cfg = ensure_config()["configurable"]
     return cfg["driver_id"], cfg["thread_id"]
 
 
@@ -40,9 +47,9 @@ def _reject_ownership(con, driver_id: str, tool_name: str, arguments: dict) -> d
 
 
 @tool
-def resolve_driver_context(config: RunnableConfig) -> dict:
+def resolve_driver_context() -> dict:
     """Look up the driver's active shipments for this session."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         result = dc.resolve_driver_context(con, driver_id)
         con.commit()
@@ -50,9 +57,9 @@ def resolve_driver_context(config: RunnableConfig) -> dict:
 
 
 @tool
-def get_shipment_state(shipment_id: str, config: RunnableConfig) -> dict:
+def get_shipment_state(shipment_id: str) -> dict:
     """Fetch the current status, ETA, and appointment (if any) for a shipment."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "get_shipment_state", {"shipment_id": shipment_id})
@@ -67,10 +74,9 @@ def record_eta_update(
     declared_eta: str,
     confidence: Literal["LOW", "MEDIUM", "HIGH"],
     source: Literal["DRIVER_DECLARED", "OPERATIONS_OVERRIDE"],
-    config: RunnableConfig,
 ) -> dict:
     """Record a driver-declared arrival time (ISO-8601 with timezone), never a duration."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "record_eta_update", {"shipment_id": shipment_id})
@@ -85,10 +91,9 @@ def record_driver_constraint(
     shipment_id: str,
     type: Literal["LATEST_GATE_OUT", "LATEST_UNLOAD_START", "EARLIEST_ARRIVAL", "OTHER"],
     value: str,
-    config: RunnableConfig,
 ) -> dict:
     """Record a deadline the driver stated (e.g. "must leave by 1:30"), ISO-8601 with timezone."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "record_driver_constraint", {"shipment_id": shipment_id})
@@ -99,9 +104,9 @@ def record_driver_constraint(
 
 
 @tool
-def find_feasible_slots(shipment_id: str, config: RunnableConfig, earliest_ts: str | None = None) -> dict:
+def find_feasible_slots(shipment_id: str, earliest_ts: str | None = None) -> dict:
     """Find available dock slots for a shipment after its declared ETA. Never holds capacity."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "find_feasible_slots", {"shipment_id": shipment_id})
@@ -111,9 +116,9 @@ def find_feasible_slots(shipment_id: str, config: RunnableConfig, earliest_ts: s
 
 
 @tool
-def hold_slot(option_token: str, config: RunnableConfig) -> dict:
+def hold_slot(option_token: str) -> dict:
     """Place a soft hold on a specific option returned by find_feasible_slots."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         clock = get_clock(con)
         # shipment_id is embedded in the (unverified) token payload; extract
@@ -162,9 +167,9 @@ def hold_slot(option_token: str, config: RunnableConfig) -> dict:
 
 
 @tool
-def release_hold(hold_group_id: str, config: RunnableConfig) -> dict:
+def release_hold(hold_group_id: str) -> dict:
     """Release an active hold, e.g. because the driver changed their mind."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         owner_row = con.execute(
             "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
@@ -177,9 +182,9 @@ def release_hold(hold_group_id: str, config: RunnableConfig) -> dict:
 
 
 @tool
-def request_booking_tool(hold_group_id: str, idempotency_key: str, config: RunnableConfig) -> dict:
+def request_booking_tool(hold_group_id: str, idempotency_key: str) -> dict:
     """Convert an active hold into a real booking request."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         owner_row = con.execute(
             "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
@@ -195,9 +200,9 @@ request_booking_tool.name = "request_booking"
 
 
 @tool
-def cancel_appointment(appointment_id: str, reason: str, config: RunnableConfig) -> dict:
+def cancel_appointment(appointment_id: str, reason: str) -> dict:
     """Cancel a pending or confirmed appointment."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         owner_row = con.execute(
             "SELECT shipment_id FROM appointments WHERE appointment_id = %s", (appointment_id,)
@@ -211,9 +216,9 @@ def cancel_appointment(appointment_id: str, reason: str, config: RunnableConfig)
 
 
 @tool
-def get_appointment_status(appointment_id: str, config: RunnableConfig) -> dict:
+def get_appointment_status(appointment_id: str) -> dict:
     """Check the current status of an appointment."""
-    driver_id, _ = _session(config)
+    driver_id, _ = _session()
     with db.get_conn() as con:
         owner_row = con.execute(
             "SELECT shipment_id FROM appointments WHERE appointment_id = %s", (appointment_id,)
@@ -242,10 +247,9 @@ def escalate_to_human(
         "REPEATED_RACE_LOSS",
     ],
     context: str,
-    config: RunnableConfig,
 ) -> dict:
     """Hand off to a human dispatcher with what was tried and why it failed."""
-    driver_id, thread_id = _session(config)
+    driver_id, thread_id = _session()
     with db.get_conn() as con:
         thread_row = con.execute(
             "SELECT driver_id FROM chat_threads WHERE thread_id = %s", (thread_id,)
