@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { DockTimeline as DockTimelineData } from "@/lib/types";
+import type { DockSpan, DockTimeline as DockTimelineData } from "@/lib/types";
 import { dayWindow, formatIstDate, formatIstTime, pctInWindow } from "@/lib/time";
 
 const STATUS_BAR: Record<string, string> = {
@@ -20,6 +20,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
     return set.size > 0 ? Array.from(set) : [formatIstDate(new Date().toISOString())];
   }, [data]);
   const [dayLabel, setDayLabel] = useState(days[0]);
+  const [selected, setSelected] = useState<DockSpan | null>(null);
 
   const anchorIso =
     data.spans.find((s) => formatIstDate(s.span_start) === dayLabel)?.span_start ??
@@ -86,13 +87,23 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                   .map((s) => {
                     const left = pctInWindow(s.span_start, window);
                     const right = pctInWindow(s.span_end, window);
+                    const confirmed = s.status === "CONFIRMED";
                     return (
                       <div
                         key={s.appointment_id}
                         title={`${s.shipment_id} · ${s.status} · ${formatIstTime(s.span_start)}-${formatIstTime(s.span_end)}`}
-                        className={`absolute top-1.5 h-7 rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90`}
+                        onClick={confirmed ? () => setSelected(s) : undefined}
+                        className={`absolute top-1.5 flex h-7 items-center overflow-hidden rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90 ${
+                          confirmed ? "cursor-pointer ring-1 ring-inset ring-ink/0 hover:ring-ink/40" : ""
+                        }`}
                         style={{ left: `${left}%`, width: `${Math.max(right - left, 0.6)}%` }}
-                      />
+                      >
+                        {confirmed && (
+                          <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
+                            {s.shipment_id}
+                          </span>
+                        )}
+                      </div>
                     );
                   })}
                 {data.holds
@@ -129,6 +140,38 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
           <span className="h-2 w-2 rounded-sm bg-red/40" /> breakdown / maintenance
         </span>
       </div>
+
+      {selected && (
+        <div className="mt-2 flex items-start justify-between rounded border border-green/40 bg-green/10 px-3 py-2">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-data text-[11px] text-paper/80 sm:grid-cols-4">
+            <div>
+              <dt className="text-paper/40">shipment</dt>
+              <dd>{selected.shipment_id}</dd>
+            </div>
+            <div>
+              <dt className="text-paper/40">appointment</dt>
+              <dd>{selected.appointment_id}</dd>
+            </div>
+            <div>
+              <dt className="text-paper/40">dock</dt>
+              <dd>{data.docks.find((d) => d.dock_id === selected.dock_id)?.dock_code ?? selected.dock_id}</dd>
+            </div>
+            <div>
+              <dt className="text-paper/40">span</dt>
+              <dd>
+                {formatIstTime(selected.span_start)}–{formatIstTime(selected.span_end)}
+              </dd>
+            </div>
+          </dl>
+          <button
+            onClick={() => setSelected(null)}
+            aria-label="Close"
+            className="ml-2 shrink-0 text-paper/40 hover:text-paper"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
