@@ -90,10 +90,14 @@ class PostgresWarehouseStore:
         )
 
 
-def notify_warehouse(con, appointment_id: str, shipment_id: str, dock_id: str, clock: Clock) -> bool:
+def notify_warehouse(
+    con, appointment_id: str, shipment_id: str, dock_id: str, clock: Clock, channel: str = "EMAIL"
+) -> bool:
     """Sends the booking request to the facility's warehouse coordinator.
-    Returns True if the message left our system (SENT/DELIVERED/QUEUED),
-    False if it failed outright (e.g. no email on file for the contact)."""
+    channel defaults to EMAIL; the pending-confirmation sweep retries on
+    SMS per the channel ladder (§7) if EMAIL fails or times out. Returns
+    True if the message left our system (SENT/DELIVERED/QUEUED), False if
+    it failed outright (e.g. no email on file for the contact)."""
     facility_row = con.execute(
         """
         SELECT f.facility_id, d.dock_code FROM docks d
@@ -104,9 +108,10 @@ def notify_warehouse(con, appointment_id: str, shipment_id: str, dock_id: str, c
     ).fetchone()
     facility_id, dock_code = facility_row
 
+    address_column = "email" if channel == "EMAIL" else "phone"
     contact = con.execute(
-        """
-        SELECT email FROM facility_contacts
+        f"""
+        SELECT {address_column} FROM facility_contacts
         WHERE facility_id = %s AND contact_role = 'WAREHOUSE_COORDINATOR' AND active_flag = TRUE
         LIMIT 1
         """,
@@ -118,10 +123,10 @@ def notify_warehouse(con, appointment_id: str, shipment_id: str, dock_id: str, c
         operational_message_id=f"OM-{uuid.uuid4().hex[:12]}",
         shipment_id=shipment_id,
         appointment_id=appointment_id,
-        channel="EMAIL",
+        channel=channel,
         sender_address=SENDER_ADDRESS,
         recipient_address=recipient,
-        subject=f"Slot request for {shipment_id}",
+        subject=f"Slot request for {shipment_id}" if channel == "EMAIL" else None,
         body=f"Requesting confirmation for {appointment_id} at dock {dock_code}.",
     )
 

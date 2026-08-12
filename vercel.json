@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/sweep_holds", "schedule": "* * * * *" },
+    { "path": "/api/cron/sweep_pending_confirmations", "schedule": "* * * * *" },
+    { "path": "/api/cron/sweep_escalations", "schedule": "* * * * *" },
+    { "path": "/api/cron/deliver_warehouse_replies", "schedule": "* * * * *" }
+  ]
+}

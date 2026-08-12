@@ -195,9 +195,16 @@ def build_span_candidates(
 
 
 def evaluate_span(
-    con, ctx: ShipmentContext, span: SpanCandidate, clock: Clock
+    con,
+    ctx: ShipmentContext,
+    span: SpanCandidate,
+    clock: Clock,
+    exclude_appointment_id: str | None = None,
 ) -> list[str]:
-    """All 13 predicates against the whole span (I7). Returns failing reason codes."""
+    """All 13 predicates against the whole span (I7). Returns failing reason
+    codes. Pass exclude_appointment_id when re-validating an *existing*
+    appointment before confirming it (I6) — otherwise F11 would flag the
+    appointment's own allocation as occupying its own slot."""
     failures: list[str] = []
     constants = get_operating_constants()
 
@@ -268,9 +275,10 @@ def evaluate_span(
         SELECT 1 FROM appointment_slot_allocations al
         JOIN appointments a ON a.appointment_id = al.appointment_id
         WHERE al.slot_id = ANY(%s) AND a.is_current AND a.appointment_status = ANY(%s)
+          AND a.appointment_id IS DISTINCT FROM %s
         LIMIT 1
         """,
-        (span.slot_ids, list(ACTIVE_APPOINTMENT_STATUSES)),
+        (span.slot_ids, list(ACTIVE_APPOINTMENT_STATUSES), exclude_appointment_id),
     ).fetchone()
     if occupied:
         failures.append("SLOT_OCCUPIED")
