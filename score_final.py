@@ -1,7 +1,12 @@
-import sqlite3
+import os
 from datetime import datetime
-con=sqlite3.connect('setuhaul_freight_operations.db'); con.row_factory=sqlite3.Row
-NOW=datetime.fromisoformat('2026-08-04T10:00:00+05:30'); dt=lambda s: datetime.fromisoformat(s)
+
+import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
+con = psycopg.connect(os.environ["DATABASE_URL"], row_factory=psycopg.rows.dict_row)
+NOW=datetime.fromisoformat('2026-08-04T10:00:00+05:30'); dt=lambda s: s if isinstance(s, datetime) else datetime.fromisoformat(s)
 
 PRIORITY_POINTS = {'CRITICAL':9.0,'HIGH':6.0,'NORMAL':3.0,'LOW':0.0}
 WAIT_LINEAR, WAIT_QUAD = 1.5, 0.6
@@ -11,17 +16,18 @@ FAIRNESS_PER_WIN = -0.4
 
 wins={r['carrier_id']:r['n'] for r in con.execute(
  """SELECT s.carrier_id,COUNT(*) n FROM appointments a JOIN shipments s ON s.shipment_id=a.shipment_id
-    WHERE a.is_current=1 AND a.appointment_status IN ('CONFIRMED','IN_PROGRESS') GROUP BY s.carrier_id""")}
+    WHERE a.is_current=TRUE AND a.appointment_status IN ('CONFIRMED','IN_PROGRESS') GROUP BY s.carrier_id""")}
 
-rows=con.execute("""SELECT v.shipment_id,v.priority_code,v.eta_confidence,
+rows=con.execute("""SELECT s.shipment_id,s.priority_code,e.eta_confidence,
   s.temperature_control_required tc,s.carrier_id,c.gate_in_ts,c.queue_state,sl.slot_start_ts
-  FROM v_inbound_operational_state v JOIN shipments s ON s.shipment_id=v.shipment_id
-  LEFT JOIN facility_checkins c ON c.shipment_id=v.shipment_id
-  LEFT JOIN appointments a ON a.shipment_id=v.shipment_id AND a.is_current=1
+  FROM shipments s
+  LEFT JOIN v_latest_eta e ON e.shipment_id=s.shipment_id
+  LEFT JOIN facility_checkins c ON c.shipment_id=s.shipment_id
+  LEFT JOIN appointments a ON a.shipment_id=s.shipment_id AND a.is_current=TRUE
   LEFT JOIN appointment_slots sl ON sl.slot_id=a.slot_id
-  WHERE v.destination_facility_id='FAC-JAI-01'
-    AND (c.queue_state LIKE 'WAITING%' OR v.current_status IN ('IN_TRANSIT','ASSIGNED'))
-    AND v.required_dock_type IN ('STANDARD','ANY')""").fetchall()
+  WHERE s.destination_facility_id='FAC-JAI-01'
+    AND (c.queue_state LIKE 'WAITING%' OR s.current_status IN ('IN_TRANSIT','ASSIGNED'))
+    AND s.required_dock_type IN ('STANDARD','ANY')""").fetchall()
 
 def score(r):
     # Waiting counts from max(gate_in, slot_start): INVOLUNTARY waiting only.
