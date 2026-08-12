@@ -1,7 +1,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
-from ..clock import IST, Clock
+from clock import IST, Clock
 from ..config import get_operating_constants
 from ..models import FeasibleSpan, Options, Rejected, ToolResult
 

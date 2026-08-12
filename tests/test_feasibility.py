@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from src import db
-from src.clock import SimulatedClock
+from clock import SimulatedClock
 from src.core.feasibility import (
     ShipmentContext,
     build_span_candidates,

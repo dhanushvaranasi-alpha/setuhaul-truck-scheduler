@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from src import db
-from src.clock import IST, SimulatedClock
+from clock import IST, SimulatedClock
 from src.core.holds import create_hold
 from src.reset_demo import reset_demo
 

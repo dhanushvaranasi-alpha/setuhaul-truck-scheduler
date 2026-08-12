@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from src import db
-from src.clock import SimulatedClock
+from clock import SimulatedClock
 from src.config import get_allocation_policy
 from src.core.allocation import rank_shipments, score_shipment
 from src.reset_demo import reset_demo

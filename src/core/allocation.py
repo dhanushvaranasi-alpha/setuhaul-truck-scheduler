@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from ..clock import Clock
+from clock import Clock
 from ..config import get_allocation_policy
 from ..models import AllocationPolicy
 
