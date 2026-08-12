@@ -10,6 +10,14 @@ const STATUS_BAR: Record<string, string> = {
   IN_PROGRESS: "bg-slate",
 };
 
+// Dock capability, not appointment status — deliberately distinct colors
+// from STATUS_BAR above so the two dimensions don't read as the same thing.
+// STANDARD gets no badge; it's the default, nothing to call out.
+const DOCK_TYPE_BADGE: Record<string, string> = {
+  REEFER: "text-slate border-slate/40",
+  HEAVY: "text-paper/80 border-paper/30",
+};
+
 const HOUR_MARKS = [6, 9, 12, 15, 18, 21];
 
 export function DockTimeline({ data }: { data: DockTimelineData }) {
@@ -64,8 +72,18 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
         <div className="divide-y divide-line">
           {data.docks.map((dock) => (
             <div key={dock.dock_id} className="relative flex h-10 items-center">
-              <div className="w-16 shrink-0 border-r border-line px-2 font-data text-xs text-paper/70">
-                {dock.dock_code}
+              <div
+                className="flex w-20 shrink-0 flex-col justify-center gap-0.5 border-r border-line px-2"
+                title={dock.dock_type}
+              >
+                <span className="font-data text-xs text-paper/70">{dock.dock_code}</span>
+                {DOCK_TYPE_BADGE[dock.dock_type] && (
+                  <span
+                    className={`w-fit rounded-sm border px-1 font-data text-[8px] leading-tight label-track ${DOCK_TYPE_BADGE[dock.dock_type]}`}
+                  >
+                    {dock.dock_type}
+                  </span>
+                )}
               </div>
               <div className="relative h-full flex-1">
                 {data.blocked_windows
@@ -138,6 +156,12 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
         </span>
         <span className="flex items-center gap-1">
           <span className="h-2 w-2 rounded-sm bg-red/40" /> breakdown / maintenance
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm border border-slate/40" /> reefer dock
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm border border-paper/30" /> heavy dock
         </span>
       </div>
 
