@@ -59,7 +59,80 @@ class HoldConfirmed(BaseModel):
     contention_ratio: float
 
 
-ToolResult = Union[Booked, Rejected, LostRace, Escalated, Options, HoldConfirmed]
+# §8a names 6 result types, one per booking-critical tool (find_feasible_slots
+# -> Options, hold_slot -> HoldConfirmed, request_booking -> Booked/LostRace,
+# escalate_to_human -> Escalated, and Rejected as the universal failure
+# shape). The remaining tools (resolve_driver_context, get_shipment_state,
+# record_eta_update, record_driver_constraint, get_appointment_status,
+# release_hold, cancel_appointment) aren't named there, but the stated
+# principle — "every tool returns JSON with a status field, read it first" —
+# still applies to them, so they get their own status-discriminated shapes
+# rather than being forced into an unrelated model.
+
+
+class ShipmentSummary(BaseModel):
+    shipment_id: str
+    order_reference: str
+    current_status: str
+    priority_code: str
+
+
+class DriverContext(BaseModel):
+    status: Literal["driver_context"]
+    driver_id: str
+    active_shipments: list[ShipmentSummary]
+
+
+class ShipmentState(BaseModel):
+    status: Literal["shipment_state"]
+    shipment_id: str
+    current_status: str
+    appointment_status: str | None
+    dock_code: str | None
+    span_start: str | None
+    span_end: str | None
+    effective_eta: str
+    eta_confidence: str
+
+
+class Recorded(BaseModel):
+    status: Literal["recorded"]
+    record_id: str
+
+
+class AppointmentStatus(BaseModel):
+    status: Literal["appointment_status"]
+    appointment_id: str
+    appointment_status: str
+    dock_code: str | None
+    span_start: str | None
+    span_end: str | None
+
+
+class Released(BaseModel):
+    status: Literal["released"]
+    hold_group_id: str
+
+
+class Cancelled(BaseModel):
+    status: Literal["cancelled"]
+    appointment_id: str
+
+
+ToolResult = Union[
+    Booked,
+    Rejected,
+    LostRace,
+    Escalated,
+    Options,
+    HoldConfirmed,
+    DriverContext,
+    ShipmentState,
+    Recorded,
+    AppointmentStatus,
+    Released,
+    Cancelled,
+]
 
 
 # --------------------------------------------------------------------------

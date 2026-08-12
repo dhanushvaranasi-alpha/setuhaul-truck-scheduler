@@ -333,7 +333,10 @@ def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: C
         if results:
             return Options(
                 status="options",
-                spans=[_to_feasible_span(s, ctx) for s in results[: constants.max_options_returned]],
+                spans=[
+                    _to_feasible_span(con, s, ctx, clock)
+                    for s in results[: constants.max_options_returned]
+                ],
                 searched_until=band_end.isoformat(),
             )
 
@@ -349,7 +352,8 @@ def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: C
                 return Options(
                     status="options",
                     spans=[
-                        _to_feasible_span(s, ctx) for s in results[: constants.max_options_returned]
+                        _to_feasible_span(con, s, ctx, clock)
+                        for s in results[: constants.max_options_returned]
                     ],
                     searched_until=end_of_day.isoformat(),
                 )
@@ -375,9 +379,12 @@ def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: C
         )
 
 
-def _to_feasible_span(span: SpanCandidate, ctx: ShipmentContext) -> FeasibleSpan:
+def _to_feasible_span(con, span: SpanCandidate, ctx: ShipmentContext, clock: Clock) -> FeasibleSpan:
+    from .tokens import issue_option_token
+
+    issued_at = clock.now().isoformat()
     return FeasibleSpan(
-        option_token="",  # signed in the tool layer (§8b), not the core
+        option_token=issue_option_token(con, span.slot_ids, ctx.shipment_id, issued_at),
         dock_id=span.dock.dock_id,
         dock_code=span.dock.dock_code,
         span_start=span.span_start.isoformat(),
