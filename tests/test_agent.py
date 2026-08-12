@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from langchain_core.callbacks.base import BaseCallbackHandler
 
@@ -24,15 +26,18 @@ def test_drv004_ambiguous_message_asks_no_tool_call():
     tool at all (§9, done-when for Step 12)."""
     from src.agent import build_agent_with_history
 
+    thread_id = "DRV004-2026-08-04-test"
     recorder = ToolCallRecorder()
     agent = build_agent_with_history()
     response = agent.invoke(
         {"input": "Hey, I'm running late, traffic is bad."},
         config={
             "configurable": {
-                "session_id": "DRV004-2026-08-04-test",
+                # message_store.session_id is UUID-typed (langchain_postgres);
+                # thread_id stays human-readable for chat_threads/ownership.
+                "session_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, thread_id)),
                 "driver_id": "DRV004",
-                "thread_id": "DRV004-2026-08-04-test",
+                "thread_id": thread_id,
             },
             "callbacks": [recorder],
         },

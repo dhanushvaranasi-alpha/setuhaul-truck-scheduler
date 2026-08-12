@@ -1,14 +1,18 @@
 import os
+import uuid
 
+import psycopg
 from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_community.chat_message_histories import PostgresChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
+from langchain_postgres import PostgresChatMessageHistory
 
 from . import db
 from .clock_state import get_clock
 from .tools import TOOLS
+
+MESSAGE_STORE_TABLE = "message_store"
 
 SYSTEM_PROMPT = """You are SetuHaul's dispatch assistant, texting with a truck driver who is
 about to miss (or has missed) a warehouse dock appointment.
@@ -84,14 +88,23 @@ def build_executor(llm: ChatOpenAI | None = None) -> AgentExecutor:
     return AgentExecutor(agent=agent, tools=TOOLS, verbose=False)
 
 
+def _history_for_session(session_id: str) -> PostgresChatMessageHistory:
+    # direct, not pooled (§8b) — a fresh connection per lookup, matching the
+    # lifecycle of the langchain_community class this replaced.
+    connection = psycopg.connect(os.environ["DATABASE_URL"])
+    PostgresChatMessageHistory.create_tables(connection, MESSAGE_STORE_TABLE)  # idempotent
+    return PostgresChatMessageHistory(MESSAGE_STORE_TABLE, session_id, sync_connection=connection)
+
+
+# TODO(post-Saturday): RunnableWithMessageHistory is LangChainPendingDeprecationWarning
+# in favor of LangGraph's built-in persistence. Deliberately not migrating before the
+# demo — suppressed in pytest config (pyproject.toml) so it doesn't clutter test output,
+# but it still surfaces in real logs as a reminder this needs doing.
 def build_agent_with_history(llm: ChatOpenAI | None = None) -> RunnableWithMessageHistory:
     executor = build_executor(llm)
     return RunnableWithMessageHistory(
         executor,
-        lambda session_id: PostgresChatMessageHistory(
-            session_id=session_id,
-            connection_string=os.environ["DATABASE_URL"],  # direct, not pooled (§8b)
-        ),
+        _history_for_session,
         input_messages_key="input",
         history_messages_key="history",
     )
@@ -112,10 +125,14 @@ def _ensure_chat_thread(driver_id: str, thread_id: str) -> None:
 
 
 def handle_message(driver_id: str, date_str: str, message: str, llm: ChatOpenAI | None = None) -> str:
-    """Thread ID = driver_id + '-' + date (§8b). Doubles as the LangChain
-    session_id and the operational chat_threads.thread_id, so tools that
-    validate against chat_threads (escalate_to_human) resolve correctly."""
+    """Thread ID = driver_id + '-' + date (§8b), used as the operational
+    chat_threads.thread_id and for tool-level ownership checks. langchain_postgres's
+    message_store requires session_id to be a genuine UUID, so the LangChain
+    history layer keys on a UUID deterministically derived from thread_id
+    (uuid5, stable per thread_id) rather than thread_id itself — the two
+    concepts are decoupled at the LangChain boundary but stay one-to-one."""
     thread_id = f"{driver_id}-{date_str}"
+    session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, thread_id))
     _ensure_chat_thread(driver_id, thread_id)
 
     agent = build_agent_with_history(llm)
@@ -123,7 +140,7 @@ def handle_message(driver_id: str, date_str: str, message: str, llm: ChatOpenAI 
         {"input": message},
         config={
             "configurable": {
-                "session_id": thread_id,
+                "session_id": session_id,
                 "driver_id": driver_id,
                 "thread_id": thread_id,
             }
