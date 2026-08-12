@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+:root {
+  --color-ink: #12181f;
+  --color-panel: #1b2430;
+  --color-panel-raised: #232e3c;
+  --color-line: #2e3a47;
+  --color-paper: #ede7da;
+  --color-paper-dim: #ddd5c2;
+  --color-amber: #e8a33d;
+  --color-green: #4c9a6a;
+  --color-red: #c1503f;
+  --color-slate: #5b7c99;
+}
+
+@theme inline {
+  --color-ink: var(--color-ink);
+  --color-panel: var(--color-panel);
+  --color-panel-raised: var(--color-panel-raised);
+  --color-line: var(--color-line);
+  --color-paper: var(--color-paper);
+  --color-paper-dim: var(--color-paper-dim);
+  --color-amber: var(--color-amber);
+  --color-green: var(--color-green);
+  --color-red: var(--color-red);
+  --color-slate: var(--color-slate);
+
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-data: var(--font-data);
+}
+
+body {
+  font-family: var(--font-body), sans-serif;
+}
+
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+
+.font-data {
+  font-family: var(--font-data), monospace;
+}
+
+.label-track {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
