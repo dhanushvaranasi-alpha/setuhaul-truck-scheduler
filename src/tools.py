@@ -182,17 +182,16 @@ def release_hold(hold_group_id: str) -> dict:
 
 
 @tool
-def request_booking_tool(hold_group_id: str, idempotency_key: str) -> dict:
-    """Convert an active hold into a real booking request."""
+def request_booking_tool(shipment_id: str, idempotency_key: str) -> dict:
+    """Convert the shipment's actively held slot into a real booking
+    request. The held slot is looked up from shipment_id — you don't need
+    and can't pass a hold_group_id."""
     driver_id, _ = _session()
     with db.get_conn() as con:
-        owner_row = con.execute(
-            "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
-        ).fetchone()
-        if owner_row is None or not dc.owns_shipment(con, owner_row[0], driver_id):
-            return _reject_ownership(con, driver_id, "request_booking", {"hold_group_id": hold_group_id})
+        if not dc.owns_shipment(con, shipment_id, driver_id):
+            return _reject_ownership(con, driver_id, "request_booking", {"shipment_id": shipment_id})
         clock = get_clock(con)
-    result = request_booking(hold_group_id, idempotency_key, clock)
+    result = request_booking(shipment_id, idempotency_key, clock)
     return result.model_dump()
 
 
@@ -200,21 +199,20 @@ request_booking_tool.name = "request_booking"
 
 
 @tool
-def reschedule_appointment_tool(hold_group_id: str, idempotency_key: str) -> dict:
-    """Cancel the driver's current appointment for this shipment and convert
-    an active hold into its replacement, in one atomic step. Use this
+def reschedule_appointment_tool(shipment_id: str) -> dict:
+    """Cancel the driver's current appointment for this shipment and confirm
+    its actively held slot as the replacement, in one atomic step. Use this
     instead of request_booking when the driver already has an appointment
     for the shipment and wants to move it — never cancel_appointment
-    followed by request_booking as two separate calls."""
+    followed by request_booking as two separate calls. The hold and the
+    appointment being replaced are both looked up from shipment_id — no
+    other ID is needed."""
     driver_id, _ = _session()
     with db.get_conn() as con:
-        owner_row = con.execute(
-            "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
-        ).fetchone()
-        if owner_row is None or not dc.owns_shipment(con, owner_row[0], driver_id):
-            return _reject_ownership(con, driver_id, "reschedule_appointment", {"hold_group_id": hold_group_id})
+        if not dc.owns_shipment(con, shipment_id, driver_id):
+            return _reject_ownership(con, driver_id, "reschedule_appointment", {"shipment_id": shipment_id})
         clock = get_clock(con)
-    result = reschedule_appointment(hold_group_id, idempotency_key, clock)
+    result = reschedule_appointment(shipment_id, clock)
     return result.model_dump()
 
 

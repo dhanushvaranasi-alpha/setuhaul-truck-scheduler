@@ -63,9 +63,9 @@ def test_reschedule_cancels_old_books_new_and_links_them():
             "SELECT appointment_id FROM appointments WHERE shipment_id = 'SHP1006' AND is_current"
         ).fetchone()[0]
 
-    held, *_ = _hold_new_slot("SHP1006", "2026-08-04T13:00:00+05:30", clock)
+    _hold_new_slot("SHP1006", "2026-08-04T13:00:00+05:30", clock)
 
-    result = reschedule_appointment(held.hold_group_id, f"IDEM-{uuid.uuid4().hex[:12]}", clock)
+    result = reschedule_appointment("SHP1006", clock)
     assert result.status == "booked", result
     assert result.appointment_id != old_appointment_id
 
@@ -86,9 +86,9 @@ def test_reschedule_cancels_old_books_new_and_links_them():
 def test_reschedule_without_existing_appointment_is_rejected_not_crashed():
     # SHP1012 has no appointment row at all in seed data.
     clock = SimulatedClock()
-    held, *_ = _hold_new_slot("SHP1012", "2026-08-04T13:00:00+05:30", clock)
+    _hold_new_slot("SHP1012", "2026-08-04T13:00:00+05:30", clock)
 
-    result = reschedule_appointment(held.hold_group_id, f"IDEM-{uuid.uuid4().hex[:12]}", clock)
+    result = reschedule_appointment("SHP1012", clock)
 
     assert result.status == "rejected"
     assert result.reason == "NOT_RESCHEDULABLE"
@@ -105,7 +105,7 @@ def test_reschedule_lost_race_leaves_old_appointment_untouched():
             "SELECT appointment_id FROM appointments WHERE shipment_id = 'SHP1007' AND is_current"
         ).fetchone()[0]
 
-    held, dock_id, span_start, span_end, slot_id = _hold_new_slot(
+    _held, dock_id, span_start, span_end, slot_id = _hold_new_slot(
         "SHP1007", "2026-08-04T13:00:00+05:30", clock
     )
 
@@ -137,7 +137,7 @@ def test_reschedule_lost_race_leaves_old_appointment_untouched():
                 ),
             )
 
-    result = reschedule_appointment(held.hold_group_id, f"IDEM-{uuid.uuid4().hex[:12]}", clock)
+    result = reschedule_appointment("SHP1007", clock)
     assert result.status == "lost_race", result
 
     with db.get_conn() as con:

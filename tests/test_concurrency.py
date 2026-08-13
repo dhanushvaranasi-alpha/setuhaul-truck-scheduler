@@ -199,7 +199,7 @@ def _attempt_hold_then_book(shipment_id, clock):
         con.commit()
     if held.status != "held":
         return held  # Rejected(SLOT_HELD) — lost the hold race
-    return request_booking(held.hold_group_id, f"IDEM-{held.hold_group_id}", clock)
+    return request_booking(shipment_id, f"IDEM-{held.hold_group_id}", clock)
 
 
 def test_no_double_booking_via_request_booking():

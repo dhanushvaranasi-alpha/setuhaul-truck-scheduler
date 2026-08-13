@@ -86,8 +86,21 @@ def _consume_holds(con, hold_group_id: str) -> None:
     )
 
 
+def _find_active_hold_group(con, shipment_id: str) -> str | None:
+    """create_hold enforces one active hold group per shipment (a new hold
+    supersedes any prior one), so this is unambiguous. Looked up from
+    shipment_id — never taken as a caller-supplied argument — because the
+    LLM re-quoting a hold_group_id it saw several turns ago is exactly the
+    kind of argument I11 says a tool should never require."""
+    row = con.execute(
+        "SELECT DISTINCT hold_group_id FROM slot_holds WHERE shipment_id = %s AND hold_status = 'ACTIVE'",
+        (shipment_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def request_booking(
-    hold_group_id: str, idempotency_key: str, clock: Clock, reschedule: bool = False
+    shipment_id: str, idempotency_key: str, clock: Clock, reschedule: bool = False
 ) -> ToolResult:
     from .. import db
 
@@ -99,17 +112,22 @@ def request_booking(
             if (prior := lookup_action(con, idempotency_key)) is not None:
                 return prior
 
+            hold_group_id = _find_active_hold_group(con, shipment_id)
+            if hold_group_id is None:
+                result = Rejected(
+                    status="rejected",
+                    reason="NO_ACTIVE_HOLD",
+                    detail="No slot is currently held for this shipment.",
+                )
+                log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "REJECTED")
+                return result
+
             # A hold group's dock_id is fixed at creation and survives expiry,
             # so this lookup works whether or not sweep is about to expire it.
-            dock_row = con.execute(
+            dock_id = con.execute(
                 "SELECT DISTINCT dock_id FROM slot_holds WHERE hold_group_id = %s",
                 (hold_group_id,),
-            ).fetchone()
-            if dock_row is None:
-                result = Rejected(status="rejected", reason="HOLD_EXPIRED", detail="No such hold.")
-                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
-                return result
-            dock_id = dock_row[0]
+            ).fetchone()[0]
 
             # 2. Sweep expired holds — MUST be inside this transaction (I8).
             sweep_expired_holds(con, dock_id, clock)
@@ -118,10 +136,9 @@ def request_booking(
             holds = _load_active_holds(con, hold_group_id)
             if not holds:
                 result = Rejected(status="rejected", reason="HOLD_EXPIRED", detail="Hold timed out.")
-                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "REJECTED")
                 return result
 
-            shipment_id = holds[0]["shipment_id"]
             slot_ids = [h["slot_id"] for h in holds]
             span_start = min(h["span_start_ts"] for h in holds)
             span_end = max(h["span_end_ts"] for h in holds)
@@ -145,7 +162,7 @@ def request_booking(
                         reason="NOT_RESCHEDULABLE",
                         detail="No existing appointment to reschedule for this shipment.",
                     )
-                    log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
+                    log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "REJECTED")
                     return result
                 replaced_appointment_id = old_row[0]
 
@@ -166,7 +183,7 @@ def request_booking(
                 result = Rejected(
                     status="rejected", reason=failures[0], detail="No longer feasible at booking time."
                 )
-                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "REJECTED")
                 log_decision(con, shipment_id, "REJECTED_INFEASIBLE", slot_ids[0])
                 return result
 
@@ -231,7 +248,7 @@ def request_booking(
                     message="that slot went just now",
                     alternatives=alternatives.spans if alternatives.status == "options" else [],
                 )
-                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "REJECTED")
                 return result
 
             # 6. Consume holds, notify the warehouse, done.
@@ -247,13 +264,21 @@ def request_booking(
                 warehouse_notified=notified,
             )
             log_decision(con, shipment_id, "BOOKED", slot_ids[0])
-            log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "SUCCESS")
+            log_action(con, idempotency_key, tool_name, {"shipment_id": shipment_id}, result, "SUCCESS")
             return result
 
 
-def reschedule_appointment(hold_group_id: str, idempotency_key: str, clock: Clock) -> ToolResult:
-    """Cancel the shipment's current appointment and book the held slot as
-    its replacement, atomically. The old appointment is looked up from the
-    hold's shipment_id — never passed in — so a lost race or infeasibility
-    rolls back the cancellation too and the driver keeps what they had."""
-    return request_booking(hold_group_id, idempotency_key, clock, reschedule=True)
+def reschedule_appointment(shipment_id: str, clock: Clock) -> ToolResult:
+    """Cancel the shipment's current appointment and book its active hold as
+    the replacement, atomically. Takes only shipment_id — the hold and the
+    appointment being replaced are both looked up from the database, never
+    passed in, so neither can be a stale or invented ID.
+
+    Each call gets a fresh idempotency key rather than one supplied by the
+    caller: the hold's single-use nature (it flips to CONSUMED on success,
+    so _find_active_hold_group finds nothing on a retry) is what actually
+    protects against a duplicate reschedule, not key matching. A genuine
+    concurrent double-call is still resolved by the no_dock_overlap EXCLUDE
+    constraint (I2), same as any other booking race."""
+    idempotency_key = f"RESCHED-{shipment_id}-{uuid.uuid4().hex[:12]}"
+    return request_booking(shipment_id, idempotency_key, clock, reschedule=True)
