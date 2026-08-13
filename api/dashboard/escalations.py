@@ -15,9 +15,11 @@ def _escalations(_query: dict) -> dict:
             """
             SELECT e.escalation_id, e.shipment_id, e.reason_code, e.status,
                    e.acknowledge_due_at, e.created_at, e.contact_ladder_position,
-                   fc.contact_name
+                   fc.contact_name, d.driver_id, d.driver_name
             FROM escalations e
             LEFT JOIN facility_contacts fc ON fc.contact_id = e.assigned_contact_id
+            LEFT JOIN shipments s ON s.shipment_id = e.shipment_id
+            LEFT JOIN drivers d ON d.driver_id = s.driver_id
             WHERE e.status = 'OPEN'
             ORDER BY e.acknowledge_due_at
             """
@@ -35,6 +37,8 @@ def _escalations(_query: dict) -> dict:
                 "created_at": r[5].isoformat(),
                 "contact_ladder_position": r[6],
                 "assigned_to": r[7],
+                "driver_id": r[8],
+                "driver_name": r[9],
                 "overdue": clock.now() > r[4],
             }
             for r in rows

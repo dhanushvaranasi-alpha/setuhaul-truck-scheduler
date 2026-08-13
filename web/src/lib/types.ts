@@ -54,6 +54,8 @@ export type DockSpan = {
   status: string;
   span_start: string;
   span_end: string;
+  driver_id: string;
+  driver_name: string;
 };
 
 export type DockHold = {
@@ -63,6 +65,8 @@ export type DockHold = {
   expires_at: string;
   span_start: string;
   span_end: string;
+  driver_id: string;
+  driver_name: string;
 };
 
 export type BlockedWindow = {
@@ -82,6 +86,8 @@ export type DockTimeline = {
 
 export type QueueEntry = {
   shipment_id: string;
+  driver_id: string | null;
+  driver_name: string | null;
   total: number;
   breakdown: Record<string, number>;
 };
@@ -100,6 +106,8 @@ export type EscalationEntry = {
   created_at: string;
   contact_ladder_position: number;
   assigned_to: string | null;
+  driver_id: string | null;
+  driver_name: string | null;
   overdue: boolean;
 };
 

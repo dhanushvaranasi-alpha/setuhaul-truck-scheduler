@@ -265,10 +265,12 @@ def deliver_warehouse_replies(clock: Clock) -> dict:
                     (appointment_id,),
                 ).fetchall()
             ]
-            dock_code_row = con.execute("SELECT dock_code FROM docks WHERE dock_id = %s", (dock_id,)).fetchone()
+            dock_row = con.execute(
+                "SELECT dock_code, dock_type FROM docks WHERE dock_id = %s", (dock_id,)
+            ).fetchone()
             ctx = get_shipment_context(con, shipment_id)
             span = SpanCandidate(
-                dock=DockCandidate(dock_id=dock_id, dock_code=dock_code_row[0]),
+                dock=DockCandidate(dock_id=dock_id, dock_code=dock_row[0], dock_type=dock_row[1]),
                 slot_ids=slot_ids,
                 span_start=span_start,
                 span_end=span_end,

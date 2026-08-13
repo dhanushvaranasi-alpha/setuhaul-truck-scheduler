@@ -124,11 +124,11 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
             # 4. Re-validate feasibility across the full span — the slot may
             # have been lost to a race while the hold sat idle.
             ctx = get_shipment_context(con, shipment_id)
-            dock_code_row = con.execute(
-                "SELECT dock_code FROM docks WHERE dock_id = %s", (dock_id,)
+            dock_row = con.execute(
+                "SELECT dock_code, dock_type FROM docks WHERE dock_id = %s", (dock_id,)
             ).fetchone()
             span = SpanCandidate(
-                dock=DockCandidate(dock_id=dock_id, dock_code=dock_code_row[0]),
+                dock=DockCandidate(dock_id=dock_id, dock_code=dock_row[0], dock_type=dock_row[1]),
                 slot_ids=slot_ids,
                 span_start=span_start,
                 span_end=span_end,

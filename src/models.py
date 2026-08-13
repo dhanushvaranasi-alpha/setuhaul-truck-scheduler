@@ -12,6 +12,7 @@ class FeasibleSpan(BaseModel):
     option_token: str
     dock_id: str
     dock_code: str
+    dock_type: str
     span_start: str  # ISO-8601 with +05:30
     span_end: str
 

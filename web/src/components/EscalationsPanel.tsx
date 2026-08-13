@@ -30,6 +30,11 @@ export function EscalationsPanel({ data }: { data: EscalationsResponse }) {
                 </span>
               </div>
               <p className="mt-0.5 text-[11px] text-paper/60">{e.reason_code}</p>
+              {e.driver_name && (
+                <p className="text-[10px] text-paper/40">
+                  {e.driver_name} · {e.driver_id}
+                </p>
+              )}
               <p className="text-[10px] text-paper/40">
                 ladder position {e.contact_ladder_position} · {e.assigned_to ?? "unassigned"}
               </p>

@@ -30,6 +30,7 @@ class ShipmentContext:
 class DockCandidate:
     dock_id: str
     dock_code: str
+    dock_type: str
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,7 @@ def get_candidate_docks(con, ctx: ShipmentContext) -> list[DockCandidate]:
             continue  # F6
         if not dock_type_matches(ctx.required_dock_type, dock_type):
             continue  # F7
-        candidates.append(DockCandidate(dock_id=dock_id, dock_code=dock_code))
+        candidates.append(DockCandidate(dock_id=dock_id, dock_code=dock_code, dock_type=dock_type))
     return candidates
 
 
@@ -395,6 +396,7 @@ def _to_feasible_span(con, span: SpanCandidate, ctx: ShipmentContext, clock: Clo
         option_token=issue_option_token(con, span.slot_ids, ctx.shipment_id, issued_at),
         dock_id=span.dock.dock_id,
         dock_code=span.dock.dock_code,
+        dock_type=span.dock.dock_type,
         # IST, not the UTC tzinfo psycopg attaches to TIMESTAMPTZ columns by
         # default (this is a display concern only — the underlying instant,
         # and therefore every comparison against it, was always correct).

@@ -22,6 +22,11 @@ export function YardQueuePanel({ data }: { data: YardQueue }) {
                 {entry.total.toFixed(2)}
               </span>
             </div>
+            {entry.driver_name && (
+              <p className="mt-0.5 text-[10px] text-paper/40">
+                {entry.driver_name} · {entry.driver_id}
+              </p>
+            )}
           </div>
         ))}
       </div>

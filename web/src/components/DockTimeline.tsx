@@ -109,7 +109,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                     return (
                       <div
                         key={s.appointment_id}
-                        title={`${s.shipment_id} · ${s.status} · ${formatIstTime(s.span_start)}-${formatIstTime(s.span_end)}`}
+                        title={`${s.shipment_id} · ${s.driver_name} · ${s.status} · ${formatIstTime(s.span_start)}-${formatIstTime(s.span_end)}`}
                         onClick={confirmed ? () => setSelected(s) : undefined}
                         className={`absolute top-1.5 flex h-7 items-center overflow-hidden rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90 ${
                           confirmed ? "cursor-pointer ring-1 ring-inset ring-ink/0 hover:ring-ink/40" : ""
@@ -132,7 +132,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                     return (
                       <div
                         key={h.hold_group_id}
-                        title={`${h.shipment_id} · HELD · expires ${formatIstTime(h.expires_at)}`}
+                        title={`${h.shipment_id} · ${h.driver_name} · HELD · expires ${formatIstTime(h.expires_at)}`}
                         className="absolute top-1.5 h-7 rounded-sm border-2 border-dashed border-amber bg-amber/20"
                         style={{ left: `${left}%`, width: `${Math.max(right - left, 0.6)}%` }}
                       />
@@ -171,6 +171,12 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
             <div>
               <dt className="text-paper/40">shipment</dt>
               <dd>{selected.shipment_id}</dd>
+            </div>
+            <div>
+              <dt className="text-paper/40">driver</dt>
+              <dd>
+                {selected.driver_name} ({selected.driver_id})
+              </dd>
             </div>
             <div>
               <dt className="text-paper/40">appointment</dt>

@@ -18,22 +18,28 @@ def _dock_timeline(query: dict) -> dict:
 
         appointments = con.execute(
             """
-            SELECT appointment_id, dock_id, shipment_id, appointment_status, span_start_ts, span_end_ts
-            FROM appointments
-            WHERE dock_id IN (SELECT dock_id FROM docks WHERE facility_id = %s)
-              AND appointment_status IN ('PENDING_CONFIRMATION','CONFIRMED','IN_PROGRESS')
-            ORDER BY span_start_ts
+            SELECT a.appointment_id, a.dock_id, a.shipment_id, a.appointment_status,
+                   a.span_start_ts, a.span_end_ts, d.driver_id, d.driver_name
+            FROM appointments a
+            JOIN shipments s ON s.shipment_id = a.shipment_id
+            JOIN drivers d ON d.driver_id = s.driver_id
+            WHERE a.dock_id IN (SELECT dock_id FROM docks WHERE facility_id = %s)
+              AND a.appointment_status IN ('PENDING_CONFIRMATION','CONFIRMED','IN_PROGRESS')
+            ORDER BY a.span_start_ts
             """,
             (facility_id,),
         ).fetchall()
 
         holds = con.execute(
             """
-            SELECT DISTINCT hold_group_id, dock_id, shipment_id, expires_at,
-                   MIN(span_start_ts) OVER (PARTITION BY hold_group_id) AS span_start,
-                   MAX(span_end_ts) OVER (PARTITION BY hold_group_id) AS span_end
-            FROM slot_holds
-            WHERE dock_id IN (SELECT dock_id FROM docks WHERE facility_id = %s) AND hold_status = 'ACTIVE'
+            SELECT DISTINCT h.hold_group_id, h.dock_id, h.shipment_id, h.expires_at,
+                   MIN(h.span_start_ts) OVER (PARTITION BY h.hold_group_id) AS span_start,
+                   MAX(h.span_end_ts) OVER (PARTITION BY h.hold_group_id) AS span_end,
+                   d.driver_id, d.driver_name
+            FROM slot_holds h
+            JOIN shipments s ON s.shipment_id = h.shipment_id
+            JOIN drivers d ON d.driver_id = s.driver_id
+            WHERE h.dock_id IN (SELECT dock_id FROM docks WHERE facility_id = %s) AND h.hold_status = 'ACTIVE'
             """,
             (facility_id,),
         ).fetchall()
@@ -59,6 +65,8 @@ def _dock_timeline(query: dict) -> dict:
                 "status": r[3],
                 "span_start": r[4].isoformat(),
                 "span_end": r[5].isoformat(),
+                "driver_id": r[6],
+                "driver_name": r[7],
             }
             for r in appointments
         ],
@@ -70,6 +78,8 @@ def _dock_timeline(query: dict) -> dict:
                 "expires_at": r[3].isoformat(),
                 "span_start": r[4].isoformat(),
                 "span_end": r[5].isoformat(),
+                "driver_id": r[6],
+                "driver_name": r[7],
             }
             for r in holds
         ],
