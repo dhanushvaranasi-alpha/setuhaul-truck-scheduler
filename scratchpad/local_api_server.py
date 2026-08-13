@@ -14,6 +14,7 @@ import importlib
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -71,7 +72,17 @@ class Dispatcher(BaseHTTPRequestHandler):
         sys.stderr.write(f"[local_api_server] {self.address_string()} {format % args}\n")
 
 
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    # Vercel runs each api/*.py invocation as an independent, concurrent
+    # function; a plain single-threaded HTTPServer here serializes every
+    # request behind whichever one is slowest (e.g. an in-flight /api/chat
+    # LLM call), which the real deployment never does and which makes local
+    # multi-request testing (dashboard polling alongside a chat send)
+    # misleading.
+    daemon_threads = True
+
+
 if __name__ == "__main__":
-    server = HTTPServer(("127.0.0.1", PORT), Dispatcher)
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Dispatcher)
     print(f"Local API dispatcher listening on http://127.0.0.1:{PORT} (proxies api/*.py)")
     server.serve_forever()
