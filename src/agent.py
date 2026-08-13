@@ -124,6 +124,47 @@ def _ensure_chat_thread(driver_id: str, thread_id: str) -> None:
         con.commit()
 
 
+def _record_chat_message(
+    thread_id: str, sender_type: str, sender_reference: str, text: str
+) -> None:
+    """chat_messages is the operational record (duplicate detection, audit
+    trail, driver-facing UI) — a separate concern from message_store, which
+    LangChain owns purely as the LLM's own context window (§8b: "Write to
+    chat_messages yourself after each exchange. Let LangChain own
+    message_store.")."""
+    with db.get_conn() as con:
+        clock = get_clock(con)
+        is_duplicate = False
+        if sender_type == "DRIVER":
+            prior = con.execute(
+                """
+                SELECT message_text FROM chat_messages
+                WHERE thread_id = %s AND sender_type = 'DRIVER'
+                ORDER BY message_ts DESC LIMIT 1
+                """,
+                (thread_id,),
+            ).fetchone()
+            is_duplicate = prior is not None and prior[0] == text
+        con.execute(
+            """
+            INSERT INTO chat_messages
+                (chat_message_id, thread_id, sender_type, sender_reference,
+                 message_text, message_ts, is_duplicate)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                f"MSG-{uuid.uuid4().hex[:12]}",
+                thread_id,
+                sender_type,
+                sender_reference,
+                text,
+                clock.now(),
+                is_duplicate,
+            ),
+        )
+        con.commit()
+
+
 def handle_message(driver_id: str, date_str: str, message: str, llm: ChatOpenAI | None = None) -> str:
     """Thread ID = driver_id + '-' + date (§8b), used as the operational
     chat_threads.thread_id and for tool-level ownership checks. langchain_postgres's
@@ -134,6 +175,7 @@ def handle_message(driver_id: str, date_str: str, message: str, llm: ChatOpenAI 
     thread_id = f"{driver_id}-{date_str}"
     session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, thread_id))
     _ensure_chat_thread(driver_id, thread_id)
+    _record_chat_message(thread_id, "DRIVER", driver_id, message)
 
     agent = build_agent_with_history(llm)
     response = agent.invoke(
@@ -146,4 +188,6 @@ def handle_message(driver_id: str, date_str: str, message: str, llm: ChatOpenAI 
             }
         },
     )
-    return response["output"]
+    reply = response["output"]
+    _record_chat_message(thread_id, "AGENT", "agent", reply)
+    return reply
