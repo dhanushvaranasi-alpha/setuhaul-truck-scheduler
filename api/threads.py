@@ -7,6 +7,8 @@ from api._http_common import json_get_handler  # noqa: E402
 from src import db  # noqa: E402
 from src.clock_state import get_clock  # noqa: E402
 
+ACTIVE_EXCEPTION_STATUSES_EXCLUDED = ("RESOLVED", "CANCELLED", "DUPLICATE")
+
 
 def _thread_state(query: dict) -> dict:
     driver_id = query.get("driver_id")
@@ -18,8 +20,10 @@ def _thread_state(query: dict) -> dict:
 
         shipments = con.execute(
             """
-            SELECT shipment_id, order_reference, current_status, priority_code
-            FROM shipments WHERE driver_id = %s ORDER BY created_at
+            SELECT s.shipment_id, s.order_reference, s.current_status, s.priority_code, f.city
+            FROM shipments s
+            JOIN facilities f ON f.facility_id = s.destination_facility_id
+            WHERE s.driver_id = %s ORDER BY s.created_at
             """,
             (driver_id,),
         ).fetchall()
@@ -59,9 +63,10 @@ def _thread_state(query: dict) -> dict:
         appointments = con.execute(
             """
             SELECT a.appointment_id, a.shipment_id, a.appointment_status, d.dock_code,
-                   a.span_start_ts, a.span_end_ts
+                   d.dock_type, a.span_start_ts, a.span_end_ts, f.city
             FROM appointments a
             JOIN shipments s ON s.shipment_id = a.shipment_id
+            JOIN facilities f ON f.facility_id = s.destination_facility_id
             LEFT JOIN docks d ON d.dock_id = a.dock_id
             WHERE s.driver_id = %s AND a.is_current
             ORDER BY a.span_start_ts
@@ -72,9 +77,11 @@ def _thread_state(query: dict) -> dict:
         hold = con.execute(
             """
             SELECT hg.hold_group_id, hg.shipment_id, MAX(hg.expires_at), MAX(hg.ttl_seconds),
-                   MAX(hg.contention_ratio), MAX(hg.dock_id)
+                   MAX(hg.contention_ratio), MAX(hg.dock_id), MAX(d.dock_code),
+                   MIN(hg.span_start_ts), MAX(hg.span_end_ts)
             FROM slot_holds hg
             JOIN shipments s ON s.shipment_id = hg.shipment_id
+            LEFT JOIN docks d ON d.dock_id = hg.dock_id
             WHERE s.driver_id = %s AND hg.hold_status = 'ACTIVE'
             GROUP BY hg.hold_group_id, hg.shipment_id
             ORDER BY MAX(hg.expires_at) DESC LIMIT 1
@@ -82,11 +89,30 @@ def _thread_state(query: dict) -> dict:
             (driver_id,),
         ).fetchone()
 
+        # Most recent still-open exception for this driver — feeds the chat
+        # input's ghost suggestion (a driver mid-exception is more likely to
+        # be following up on it than starting a new topic).
+        exception = con.execute(
+            """
+            SELECT exception_type, reported_delay_min, declared_eta_ts, shipment_id
+            FROM driver_exceptions
+            WHERE driver_id = %s AND exception_status <> ALL(%s)
+            ORDER BY reported_at DESC LIMIT 1
+            """,
+            (driver_id, list(ACTIVE_EXCEPTION_STATUSES_EXCLUDED)),
+        ).fetchone()
+
     return {
         "driver_id": driver_id,
         "now": clock.now().isoformat(),
         "shipments": [
-            {"shipment_id": r[0], "order_reference": r[1], "current_status": r[2], "priority_code": r[3]}
+            {
+                "shipment_id": r[0],
+                "order_reference": r[1],
+                "current_status": r[2],
+                "priority_code": r[3],
+                "destination_city": r[4],
+            }
             for r in shipments
         ],
         "thread_id": thread_id,
@@ -99,8 +125,10 @@ def _thread_state(query: dict) -> dict:
                 "shipment_id": r[1],
                 "appointment_status": r[2],
                 "dock_code": r[3],
-                "span_start": r[4].isoformat() if r[4] else None,
-                "span_end": r[5].isoformat() if r[5] else None,
+                "dock_type": r[4],
+                "span_start": r[5].isoformat() if r[5] else None,
+                "span_end": r[6].isoformat() if r[6] else None,
+                "destination_city": r[7],
             }
             for r in appointments
         ],
@@ -112,8 +140,21 @@ def _thread_state(query: dict) -> dict:
                 "ttl_seconds": hold[3],
                 "contention_ratio": hold[4],
                 "dock_id": hold[5],
+                "dock_code": hold[6],
+                "span_start": hold[7].isoformat() if hold[7] else None,
+                "span_end": hold[8].isoformat() if hold[8] else None,
             }
             if hold
+            else None
+        ),
+        "active_exception": (
+            {
+                "exception_type": exception[0],
+                "reported_delay_min": exception[1],
+                "declared_eta": exception[2].isoformat() if exception[2] else None,
+                "shipment_id": exception[3],
+            }
+            if exception
             else None
         ),
     }

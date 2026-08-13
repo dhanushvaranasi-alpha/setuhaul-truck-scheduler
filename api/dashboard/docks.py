@@ -19,7 +19,7 @@ def _dock_timeline(query: dict) -> dict:
         appointments = con.execute(
             """
             SELECT a.appointment_id, a.dock_id, a.shipment_id, a.appointment_status,
-                   a.span_start_ts, a.span_end_ts, d.driver_id, d.driver_name
+                   a.span_start_ts, a.span_end_ts, d.driver_id, d.driver_name, s.required_dock_type
             FROM appointments a
             JOIN shipments s ON s.shipment_id = a.shipment_id
             JOIN drivers d ON d.driver_id = s.driver_id
@@ -67,6 +67,7 @@ def _dock_timeline(query: dict) -> dict:
                 "span_end": r[5].isoformat(),
                 "driver_id": r[6],
                 "driver_name": r[7],
+                "required_dock_type": r[8],
             }
             for r in appointments
         ],

@@ -9,6 +9,7 @@ export type Shipment = {
   order_reference: string;
   current_status: string;
   priority_code: string;
+  destination_city: string;
 };
 
 export type ChatMessage = {
@@ -22,8 +23,10 @@ export type AppointmentSummary = {
   shipment_id: string;
   appointment_status: string;
   dock_code: string | null;
+  dock_type: string | null;
   span_start: string | null;
   span_end: string | null;
+  destination_city: string;
 };
 
 export type ActiveHold = {
@@ -33,6 +36,16 @@ export type ActiveHold = {
   ttl_seconds: number;
   contention_ratio: number;
   dock_id: string;
+  dock_code: string | null;
+  span_start: string | null;
+  span_end: string | null;
+};
+
+export type ActiveException = {
+  exception_type: string;
+  reported_delay_min: number | null;
+  declared_eta: string | null;
+  shipment_id: string | null;
 };
 
 export type ThreadState = {
@@ -43,6 +56,7 @@ export type ThreadState = {
   messages: ChatMessage[];
   appointments: AppointmentSummary[];
   active_hold: ActiveHold | null;
+  active_exception: ActiveException | null;
 };
 
 export type DockInfo = { dock_id: string; dock_code: string; dock_type: string };
@@ -56,6 +70,7 @@ export type DockSpan = {
   span_end: string;
   driver_id: string;
   driver_name: string;
+  required_dock_type: string;
 };
 
 export type DockHold = {
