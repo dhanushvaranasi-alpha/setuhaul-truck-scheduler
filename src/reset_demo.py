@@ -25,6 +25,7 @@ MUTABLE_TABLES = [
     "appointments",
     "appointment_slots",
     "eta_updates",
+    "message_store",
 ]
 
 

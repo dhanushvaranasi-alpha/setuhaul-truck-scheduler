@@ -3,18 +3,8 @@ import uuid
 import pytest
 from langchain_core.callbacks.base import BaseCallbackHandler
 
-from src import db
 from src.agent import handle_message
 from src.reset_demo import reset_demo
-
-# message_store is langchain_postgres's own table — reset_demo() doesn't
-# know about it (it's not part of the application schema), so conversation
-# history for these fixed test threads accumulates across every past test
-# run unless cleared explicitly. Without this, repeated runs see a longer
-# and longer prior conversation, which can change the LLM's behavior (e.g.
-# shifting from asking a fresh question to reiterating one already "asked"
-# many times in the accumulated history).
-TEST_THREAD_IDS = ["DRV004-2026-08-04-test", "DRV004-2026-08-04-smoke"]
 
 
 class ToolCallRecorder(BaseCallbackHandler):
@@ -25,17 +15,9 @@ class ToolCallRecorder(BaseCallbackHandler):
         self.tool_calls.append(serialized.get("name", "unknown"))
 
 
-def _clear_message_store():
-    session_ids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, t)) for t in TEST_THREAD_IDS]
-    with db.get_conn() as con:
-        con.execute("DELETE FROM message_store WHERE session_id = ANY(%s)", (session_ids,))
-        con.commit()
-
-
 @pytest.fixture(scope="module", autouse=True)
 def clean_db():
     reset_demo()
-    _clear_message_store()
 
 
 def test_drv004_ambiguous_message_disambiguates_with_real_data():
