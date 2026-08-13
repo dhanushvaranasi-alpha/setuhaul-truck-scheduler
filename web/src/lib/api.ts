@@ -3,6 +3,7 @@ import type {
   DockTimeline,
   EscalationsResponse,
   Metrics,
+  PendingConfirmationsResponse,
   ThreadState,
   YardQueue,
 } from "./types";
@@ -60,4 +61,18 @@ export function getEscalations(): Promise<EscalationsResponse> {
 export function getMetrics(facilityId?: string): Promise<Metrics> {
   const qs = facilityId ? `?facility_id=${encodeURIComponent(facilityId)}` : "";
   return getJson(`/api/dashboard/metrics${qs}`);
+}
+
+export function getPendingConfirmations(facilityId?: string): Promise<PendingConfirmationsResponse> {
+  const qs = facilityId ? `?facility_id=${encodeURIComponent(facilityId)}` : "";
+  return getJson(`/api/dashboard/pending_confirmations${qs}`);
+}
+
+export async function triggerAdminTick(): Promise<Record<string, unknown>> {
+  const res = await fetch("/api/admin/tick", { method: "POST" });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`admin/tick failed: ${res.status} ${body}`);
+  }
+  return res.json();
 }

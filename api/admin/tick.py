@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -15,6 +16,28 @@ from src.core.sweeps import (  # noqa: E402
     sweep_pending_confirmations,
 )
 
+# warehouse_stub.py schedules a reply reply_delay_seconds (default 45s) after
+# the outbound notification — under mode='simulated' the clock never moves
+# between requests on its own, so a tick run right after booking would never
+# find that reply due. warehouse_stub.py's own comment prescribes the fix:
+# "With a SimulatedClock, advance rather than wait: clock.advance_minutes(1);
+# warehouse.deliver_due_replies() # confirms". Only meaningful under
+# mode='simulated' — system/offset clocks already move with real time.
+SIMULATED_ADVANCE_SECONDS = 60
+
+
+def _advance_if_simulated(con) -> None:
+    mode, simulated_instant = con.execute(
+        "SELECT mode, simulated_instant FROM clock_state WHERE singleton"
+    ).fetchone()
+    if mode != "simulated":
+        return
+    con.execute(
+        "UPDATE clock_state SET simulated_instant = %s WHERE singleton",
+        (simulated_instant + timedelta(seconds=SIMULATED_ADVANCE_SECONDS),),
+    )
+    con.commit()
+
 
 def _tick(_body: dict) -> dict:
     """Runs all four sweeps in sequence — a manual stand-in for the four
@@ -26,6 +49,7 @@ def _tick(_body: dict) -> dict:
         raise PermissionError("admin/tick is disabled — set ALLOW_RESET=true")
 
     with db.get_conn() as con:
+        _advance_if_simulated(con)
         clock = get_clock(con)
 
     holds_result = sweep_holds(clock)

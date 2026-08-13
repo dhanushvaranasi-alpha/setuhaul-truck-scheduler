@@ -122,3 +122,20 @@ export type Metrics = {
   utilisation_pct: number;
   options_later_infeasible: number;
 };
+
+export type PendingAppointment = {
+  appointment_id: string;
+  shipment_id: string;
+  booked_at: string;
+  span_start: string | null;
+  span_end: string | null;
+  dock_code: string | null;
+  driver_id: string;
+  driver_name: string;
+};
+
+export type PendingConfirmationsResponse = {
+  facility_id: string;
+  now: string;
+  pending: PendingAppointment[];
+};
