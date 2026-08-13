@@ -11,7 +11,7 @@ from .clock_state import get_clock
 from .config import get_operating_constants
 from .core import driver_context as dc
 from .core import escalation as esc
-from .core.booking import log_action, request_booking
+from .core.booking import log_action, request_booking, reschedule_appointment
 from .core.feasibility import find_feasible_slots_impl
 from .core.holds import create_hold
 from .core.tokens import verify_option_token
@@ -200,6 +200,28 @@ request_booking_tool.name = "request_booking"
 
 
 @tool
+def reschedule_appointment_tool(hold_group_id: str, idempotency_key: str) -> dict:
+    """Cancel the driver's current appointment for this shipment and convert
+    an active hold into its replacement, in one atomic step. Use this
+    instead of request_booking when the driver already has an appointment
+    for the shipment and wants to move it — never cancel_appointment
+    followed by request_booking as two separate calls."""
+    driver_id, _ = _session()
+    with db.get_conn() as con:
+        owner_row = con.execute(
+            "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
+        ).fetchone()
+        if owner_row is None or not dc.owns_shipment(con, owner_row[0], driver_id):
+            return _reject_ownership(con, driver_id, "reschedule_appointment", {"hold_group_id": hold_group_id})
+        clock = get_clock(con)
+    result = reschedule_appointment(hold_group_id, idempotency_key, clock)
+    return result.model_dump()
+
+
+reschedule_appointment_tool.name = "reschedule_appointment"
+
+
+@tool
 def cancel_appointment(appointment_id: str, reason: str) -> dict:
     """Cancel a pending or confirmed appointment."""
     driver_id, _ = _session()
@@ -271,6 +293,7 @@ TOOLS = [
     hold_slot,
     release_hold,
     request_booking_tool,
+    reschedule_appointment_tool,
     cancel_appointment,
     get_appointment_status,
     escalate_to_human,

@@ -7,6 +7,7 @@ from clock import IST, Clock
 
 from ..config import get_hold_policy
 from ..models import Booked, LostRace, Rejected, ToolResult
+from .driver_context import CANCELLABLE_STATUSES
 from .feasibility import (
     DockCandidate,
     SpanCandidate,
@@ -85,8 +86,12 @@ def _consume_holds(con, hold_group_id: str) -> None:
     )
 
 
-def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> ToolResult:
+def request_booking(
+    hold_group_id: str, idempotency_key: str, clock: Clock, reschedule: bool = False
+) -> ToolResult:
     from .. import db
+
+    tool_name = "reschedule_appointment" if reschedule else "request_booking"
 
     with db.get_conn() as con:
         with con.transaction():
@@ -102,7 +107,7 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
             ).fetchone()
             if dock_row is None:
                 result = Rejected(status="rejected", reason="HOLD_EXPIRED", detail="No such hold.")
-                log_action(con, idempotency_key, "request_booking", {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
                 return result
             dock_id = dock_row[0]
 
@@ -113,13 +118,36 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
             holds = _load_active_holds(con, hold_group_id)
             if not holds:
                 result = Rejected(status="rejected", reason="HOLD_EXPIRED", detail="Hold timed out.")
-                log_action(con, idempotency_key, "request_booking", {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
                 return result
 
             shipment_id = holds[0]["shipment_id"]
             slot_ids = [h["slot_id"] for h in holds]
             span_start = min(h["span_start_ts"] for h in holds)
             span_end = max(h["span_end_ts"] for h in holds)
+
+            # 3b. Reschedule: the shipment's current active appointment is the
+            # one being replaced — looked up here (not passed by the caller)
+            # so the LLM never has to track a second ID. Must exist and be
+            # cancellable, or this isn't a reschedule at all.
+            replaced_appointment_id = None
+            if reschedule:
+                old_row = con.execute(
+                    """
+                    SELECT appointment_id FROM appointments
+                    WHERE shipment_id = %s AND is_current AND appointment_status = ANY(%s)
+                    """,
+                    (shipment_id, list(CANCELLABLE_STATUSES)),
+                ).fetchone()
+                if old_row is None:
+                    result = Rejected(
+                        status="rejected",
+                        reason="NOT_RESCHEDULABLE",
+                        detail="No existing appointment to reschedule for this shipment.",
+                    )
+                    log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
+                    return result
+                replaced_appointment_id = old_row[0]
 
             # 4. Re-validate feasibility across the full span — the slot may
             # have been lost to a race while the hold sat idle.
@@ -138,22 +166,39 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                 result = Rejected(
                     status="rejected", reason=failures[0], detail="No longer feasible at booking time."
                 )
-                log_action(con, idempotency_key, "request_booking", {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
                 log_decision(con, shipment_id, "REJECTED_INFEASIBLE", slot_ids[0])
                 return result
 
-            # 5. Insert — the database catches any race (I2), not this code.
+            # 5. Cancel the replaced appointment (if any) and insert the new
+            # one in the SAME savepoint — the database catches any race (I2),
+            # not this code, and a lost race here rolls back the cancellation
+            # too, so the driver never ends up with neither appointment.
             appointment_id = f"APT-{uuid.uuid4().hex[:12]}"
             try:
-                with con.transaction():  # savepoint: roll back only the insert on conflict
+                with con.transaction():  # savepoint: roll back only this batch on conflict
+                    if replaced_appointment_id is not None:
+                        con.execute(
+                            """
+                            UPDATE appointments
+                            SET appointment_status = 'CANCELLED',
+                                cancelled_at = %s,
+                                cancellation_reason = 'DRIVER_RESCHEDULED',
+                                is_current = FALSE,
+                                updated_at = %s
+                            WHERE appointment_id = %s
+                            """,
+                            (clock.now(), clock.now(), replaced_appointment_id),
+                        )
                     con.execute(
                         """
                         INSERT INTO appointments
                             (appointment_id, shipment_id, slot_id, dock_id,
                              span_start_ts, span_end_ts, appointment_status,
-                             booking_source, is_current, booked_at, updated_at)
+                             booking_source, is_current, booked_at, updated_at,
+                             replaced_appointment_id)
                         VALUES (%s, %s, %s, %s, %s, %s, 'PENDING_CONFIRMATION',
-                                'DRIVER_CHAT', TRUE, %s, %s)
+                                'DRIVER_CHAT', TRUE, %s, %s, %s)
                         """,
                         (
                             appointment_id,
@@ -164,6 +209,7 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                             span_end,
                             clock.now(),
                             clock.now(),
+                            replaced_appointment_id,
                         ),
                     )
                     for i, slot_id in enumerate(slot_ids):
@@ -175,7 +221,9 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                 # ExclusionViolation (23P01, I2) or DeadlockDetected (40P01,
                 # a documented GiST EXCLUDE behavior under concurrent
                 # contention — the victim's transaction is fully rolled
-                # back, so it's an equally valid lost-race signal).
+                # back, so it's an equally valid lost-race signal). The
+                # savepoint rollback also undoes the cancellation above, if
+                # any — the driver keeps their original appointment.
                 log_decision(con, shipment_id, "LOST_RACE", slot_ids[0])
                 alternatives = find_feasible_slots_impl(shipment_id, None, clock)
                 result = LostRace(
@@ -183,7 +231,7 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                     message="that slot went just now",
                     alternatives=alternatives.spans if alternatives.status == "options" else [],
                 )
-                log_action(con, idempotency_key, "request_booking", {"hold_group_id": hold_group_id}, result, "REJECTED")
+                log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "REJECTED")
                 return result
 
             # 6. Consume holds, notify the warehouse, done.
@@ -199,5 +247,13 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                 warehouse_notified=notified,
             )
             log_decision(con, shipment_id, "BOOKED", slot_ids[0])
-            log_action(con, idempotency_key, "request_booking", {"hold_group_id": hold_group_id}, result, "SUCCESS")
+            log_action(con, idempotency_key, tool_name, {"hold_group_id": hold_group_id}, result, "SUCCESS")
             return result
+
+
+def reschedule_appointment(hold_group_id: str, idempotency_key: str, clock: Clock) -> ToolResult:
+    """Cancel the shipment's current appointment and book the held slot as
+    its replacement, atomically. The old appointment is looked up from the
+    hold's shipment_id — never passed in — so a lost race or infeasibility
+    rolls back the cancellation too and the driver keeps what they had."""
+    return request_booking(hold_group_id, idempotency_key, clock, reschedule=True)
