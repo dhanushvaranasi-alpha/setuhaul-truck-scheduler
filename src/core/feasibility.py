@@ -345,7 +345,7 @@ def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: C
                     _to_feasible_span(con, s, ctx, clock)
                     for s in results[: constants.max_options_returned]
                 ],
-                searched_until=band_end.isoformat(),
+                searched_until=band_end.astimezone(IST).isoformat(),
             )
 
         # 2. widen to end of operating day (civil boundary — IST)
@@ -363,7 +363,7 @@ def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: C
                         _to_feasible_span(con, s, ctx, clock)
                         for s in results[: constants.max_options_returned]
                     ],
-                    searched_until=end_of_day.isoformat(),
+                    searched_until=end_of_day.astimezone(IST).isoformat(),
                 )
 
         # 3. next day (civil boundary — IST)
@@ -395,6 +395,9 @@ def _to_feasible_span(con, span: SpanCandidate, ctx: ShipmentContext, clock: Clo
         option_token=issue_option_token(con, span.slot_ids, ctx.shipment_id, issued_at),
         dock_id=span.dock.dock_id,
         dock_code=span.dock.dock_code,
-        span_start=span.span_start.isoformat(),
-        span_end=span.span_end.isoformat(),
+        # IST, not the UTC tzinfo psycopg attaches to TIMESTAMPTZ columns by
+        # default (this is a display concern only — the underlying instant,
+        # and therefore every comparison against it, was always correct).
+        span_start=span.span_start.astimezone(IST).isoformat(),
+        span_end=span.span_end.astimezone(IST).isoformat(),
     )

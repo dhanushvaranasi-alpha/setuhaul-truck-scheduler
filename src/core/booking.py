@@ -3,7 +3,7 @@ import uuid
 import psycopg.errors
 from psycopg.types.json import Json
 
-from clock import Clock
+from clock import IST, Clock
 
 from ..config import get_hold_policy
 from ..models import Booked, LostRace, Rejected, ToolResult
@@ -194,8 +194,8 @@ def request_booking(hold_group_id: str, idempotency_key: str, clock: Clock) -> T
                 status="booked",
                 appointment_id=appointment_id,
                 dock_code=span.dock.dock_code,
-                span_start=span_start.isoformat(),
-                span_end=span_end.isoformat(),
+                span_start=span_start.astimezone(IST).isoformat(),
+                span_end=span_end.astimezone(IST).isoformat(),
                 warehouse_notified=notified,
             )
             log_decision(con, shipment_id, "BOOKED", slot_ids[0])

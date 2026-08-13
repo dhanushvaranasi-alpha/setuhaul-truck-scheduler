@@ -1,6 +1,6 @@
 import uuid
 
-from clock import Clock
+from clock import IST, Clock
 
 from ..models import (
     AppointmentStatus,
@@ -62,9 +62,9 @@ def get_shipment_state(con, shipment_id: str) -> ShipmentState:
         current_status=current_status,
         appointment_status=appointment_status,
         dock_code=dock_code,
-        span_start=span_start.isoformat() if span_start else None,
-        span_end=span_end.isoformat() if span_end else None,
-        effective_eta=eta.isoformat(),
+        span_start=span_start.astimezone(IST).isoformat() if span_start else None,
+        span_end=span_end.astimezone(IST).isoformat() if span_end else None,
+        effective_eta=eta.astimezone(IST).isoformat(),
         eta_confidence=confidence,
     )
 
@@ -116,8 +116,8 @@ def get_appointment_status(con, appointment_id: str) -> AppointmentStatus | Reje
         appointment_id=appointment_id,
         appointment_status=appointment_status,
         dock_code=dock_code,
-        span_start=span_start.isoformat() if span_start else None,
-        span_end=span_end.isoformat() if span_end else None,
+        span_start=span_start.astimezone(IST).isoformat() if span_start else None,
+        span_end=span_end.astimezone(IST).isoformat() if span_end else None,
     )
 
 

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import psycopg.errors
 
-from clock import Clock
+from clock import IST, Clock
 
 from ..config import get_hold_policy
 from ..models import HoldConfirmed, HoldPolicy, Rejected, ToolResult
@@ -149,7 +149,7 @@ def create_hold(
     return HoldConfirmed(
         status="held",
         hold_group_id=hold_group_id,
-        expires_at=expires_at.isoformat(),
+        expires_at=expires_at.astimezone(IST).isoformat(),
         ttl_seconds=ttl_seconds,
         contention_ratio=ratio,
     )

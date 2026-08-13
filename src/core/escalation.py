@@ -1,7 +1,7 @@
 import uuid
 from datetime import timedelta
 
-from clock import Clock
+from clock import IST, Clock
 from psycopg.types.json import Json
 
 from ..config import get_operating_constants
@@ -87,5 +87,5 @@ def escalate_to_human(con, thread_id: str, reason_code: str, context: dict, cloc
         escalation_id=escalation_id,
         reason_code=reason_code,
         assigned_to=contact_name,
-        update_by=acknowledge_due_at.isoformat(),
+        update_by=acknowledge_due_at.astimezone(IST).isoformat(),
     )

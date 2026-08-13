@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getThreadState, listDrivers, sendChatMessage } from "@/lib/api";
 import type { Driver, ThreadState } from "@/lib/types";
+import { formatIstTime } from "@/lib/time";
 import { HoldCountdown } from "@/components/HoldCountdown";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -133,7 +134,7 @@ export default function ChatPage() {
                 >
                   <p>{m.message_text}</p>
                   <p className="mt-1 font-data text-[10px] opacity-50">
-                    {new Date(m.message_ts).toLocaleTimeString()}
+                    {formatIstTime(m.message_ts)} IST
                   </p>
                 </div>
               </div>
@@ -196,8 +197,8 @@ export default function ChatPage() {
                   </p>
                   {a.span_start && (
                     <p className="font-data text-[11px] text-ink/60">
-                      {new Date(a.span_start).toLocaleTimeString()} –{" "}
-                      {a.span_end && new Date(a.span_end).toLocaleTimeString()}
+                      {formatIstTime(a.span_start)}
+                      {a.span_end && `–${formatIstTime(a.span_end)}`} IST
                     </p>
                   )}
                 </li>
