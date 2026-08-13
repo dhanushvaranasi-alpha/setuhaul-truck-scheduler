@@ -26,6 +26,19 @@ def sweep_expired_holds(con, dock_id: str, clock: Clock) -> int:
     ).rowcount
 
 
+def find_active_hold_group(con, shipment_id: str) -> str | None:
+    """create_hold enforces one active hold group per shipment (a new hold
+    supersedes any prior one), so this is unambiguous. Looked up from
+    shipment_id — never taken as a caller-supplied argument — because the
+    LLM re-quoting a hold_group_id it saw several turns ago is exactly the
+    kind of argument I11 says a tool should never require."""
+    row = con.execute(
+        "SELECT DISTINCT hold_group_id FROM slot_holds WHERE shipment_id = %s AND hold_status = 'ACTIVE'",
+        (shipment_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def compute_contention_ratio(
     con, facility_id: str, band_start: datetime, band_end: datetime
 ) -> float:

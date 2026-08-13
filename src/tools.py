@@ -167,16 +167,15 @@ def hold_slot(option_token: str) -> dict:
 
 
 @tool
-def release_hold(hold_group_id: str) -> dict:
-    """Release an active hold, e.g. because the driver changed their mind."""
+def release_hold(shipment_id: str) -> dict:
+    """Release the active hold for this shipment, e.g. because the driver
+    changed their mind. The hold is looked up from shipment_id — you don't
+    need and can't pass a hold_group_id."""
     driver_id, _ = _session()
     with db.get_conn() as con:
-        owner_row = con.execute(
-            "SELECT shipment_id FROM slot_holds WHERE hold_group_id = %s LIMIT 1", (hold_group_id,)
-        ).fetchone()
-        if owner_row is None or not dc.owns_shipment(con, owner_row[0], driver_id):
-            return _reject_ownership(con, driver_id, "release_hold", {"hold_group_id": hold_group_id})
-        result = dc.release_hold(con, hold_group_id, "driver requested release")
+        if not dc.owns_shipment(con, shipment_id, driver_id):
+            return _reject_ownership(con, driver_id, "release_hold", {"shipment_id": shipment_id})
+        result = dc.release_hold(con, shipment_id, "driver requested release")
         con.commit()
         return result.model_dump()
 

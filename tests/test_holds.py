@@ -4,6 +4,7 @@ import pytest
 
 from src import db
 from clock import IST, SimulatedClock
+from src.core.driver_context import release_hold
 from src.core.holds import create_hold
 from src.reset_demo import reset_demo
 
@@ -82,3 +83,65 @@ def test_expired_hold_does_not_block_a_new_hold():
         ).fetchone()[0]
     assert first_status == "EXPIRED"
     assert second_status == "ACTIVE"
+
+
+def test_release_hold_frees_the_slot():
+    clock = SimulatedClock()
+    span_start = datetime(2026, 8, 6, 6, 0, 0, tzinfo=IST)
+    span_end = datetime(2026, 8, 6, 6, 15, 0, tzinfo=IST)
+    band_start = clock.now()
+    band_end = clock.now() + timedelta(hours=4)
+
+    with db.get_conn() as con:
+        held = create_hold(
+            con,
+            shipment_id="SHP1001",
+            facility_id=FACILITY_ID,
+            dock_id=DOCK_ID,
+            slot_ids=[SLOT_ID],
+            span_start=span_start,
+            span_end=span_end,
+            band_start=band_start,
+            band_end=band_end,
+            clock=clock,
+        )
+        con.commit()
+    assert held.status == "held"
+
+    with db.get_conn() as con:
+        result = release_hold(con, "SHP1001", "driver requested release")
+        con.commit()
+    assert result.status == "released"
+
+    with db.get_conn() as con:
+        hold_status = con.execute(
+            "SELECT hold_status FROM slot_holds WHERE shipment_id = 'SHP1001'"
+        ).fetchone()[0]
+    assert hold_status == "RELEASED"
+
+    # The slot is free again — a different shipment can now hold the exact
+    # same dock+span that was just released.
+    with db.get_conn() as con:
+        second = create_hold(
+            con,
+            shipment_id="SHP1002",
+            facility_id=FACILITY_ID,
+            dock_id=DOCK_ID,
+            slot_ids=[SLOT_ID],
+            span_start=span_start,
+            span_end=span_end,
+            band_start=clock.now(),
+            band_end=clock.now() + timedelta(hours=4),
+            clock=clock,
+        )
+        con.commit()
+    assert second.status == "held"
+
+
+def test_release_hold_without_active_hold_is_rejected_not_crashed():
+    with db.get_conn() as con:
+        result = release_hold(con, "SHP1001", "driver requested release")
+        con.commit()
+
+    assert result.status == "rejected"
+    assert result.reason == "NO_ACTIVE_HOLD"

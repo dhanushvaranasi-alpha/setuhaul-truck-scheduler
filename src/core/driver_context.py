@@ -12,6 +12,7 @@ from ..models import (
     ShipmentState,
     ShipmentSummary,
 )
+from .holds import find_active_hold_group
 from .holds import release_hold as _release_hold_rows
 
 CANCELLABLE_STATUSES = ("PENDING_CONFIRMATION", "CONFIRMED")
@@ -168,6 +169,11 @@ def cancel_appointment(con, appointment_id: str, reason: str, clock: Clock) -> C
     return Cancelled(status="cancelled", appointment_id=appointment_id)
 
 
-def release_hold(con, hold_group_id: str, reason: str) -> Released:
+def release_hold(con, shipment_id: str, reason: str) -> Released | Rejected:
+    hold_group_id = find_active_hold_group(con, shipment_id)
+    if hold_group_id is None:
+        return Rejected(
+            status="rejected", reason="NO_ACTIVE_HOLD", detail="No hold found for this shipment."
+        )
     _release_hold_rows(con, hold_group_id, reason)
     return Released(status="released", hold_group_id=hold_group_id)

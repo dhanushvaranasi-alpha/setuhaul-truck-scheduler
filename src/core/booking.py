@@ -15,7 +15,7 @@ from .feasibility import (
     find_feasible_slots_impl,
     get_shipment_context,
 )
-from .holds import sweep_expired_holds
+from .holds import find_active_hold_group, sweep_expired_holds
 from .notifications import notify_warehouse
 
 RESULT_CLASSES = {"booked": Booked, "rejected": Rejected, "lost_race": LostRace}
@@ -86,19 +86,6 @@ def _consume_holds(con, hold_group_id: str) -> None:
     )
 
 
-def _find_active_hold_group(con, shipment_id: str) -> str | None:
-    """create_hold enforces one active hold group per shipment (a new hold
-    supersedes any prior one), so this is unambiguous. Looked up from
-    shipment_id — never taken as a caller-supplied argument — because the
-    LLM re-quoting a hold_group_id it saw several turns ago is exactly the
-    kind of argument I11 says a tool should never require."""
-    row = con.execute(
-        "SELECT DISTINCT hold_group_id FROM slot_holds WHERE shipment_id = %s AND hold_status = 'ACTIVE'",
-        (shipment_id,),
-    ).fetchone()
-    return row[0] if row else None
-
-
 def request_booking(
     shipment_id: str, idempotency_key: str, clock: Clock, reschedule: bool = False
 ) -> ToolResult:
@@ -112,7 +99,7 @@ def request_booking(
             if (prior := lookup_action(con, idempotency_key)) is not None:
                 return prior
 
-            hold_group_id = _find_active_hold_group(con, shipment_id)
+            hold_group_id = find_active_hold_group(con, shipment_id)
             if hold_group_id is None:
                 result = Rejected(
                     status="rejected",
@@ -276,7 +263,7 @@ def reschedule_appointment(shipment_id: str, clock: Clock) -> ToolResult:
 
     Each call gets a fresh idempotency key rather than one supplied by the
     caller: the hold's single-use nature (it flips to CONSUMED on success,
-    so _find_active_hold_group finds nothing on a retry) is what actually
+    so find_active_hold_group finds nothing on a retry) is what actually
     protects against a duplicate reschedule, not key matching. A genuine
     concurrent double-call is still resolved by the no_dock_overlap EXCLUDE
     constraint (I2), same as any other booking race."""
