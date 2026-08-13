@@ -140,7 +140,7 @@ def hold_slot(option_token: str) -> dict:
         band_start = clock.now()
         band_end = clock.now() + timedelta(hours=constants.search_band_hours)
         dock_row = con.execute(
-            "SELECT dock_id, facility_id FROM appointment_slots sl JOIN docks d ON d.dock_id = sl.dock_id WHERE sl.slot_id = %s",
+            "SELECT sl.dock_id, d.facility_id FROM appointment_slots sl JOIN docks d ON d.dock_id = sl.dock_id WHERE sl.slot_id = %s",
             (token.span_slot_ids[0],),
         ).fetchone()
         dock_id, facility_id = dock_row

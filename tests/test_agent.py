@@ -38,17 +38,18 @@ def clean_db():
     _clear_message_store()
 
 
-def test_drv004_ambiguous_message_asks_no_tool_call():
+def test_drv004_ambiguous_message_disambiguates_with_real_data():
     """DRV004 has two active shipments (SHP1004, SHP1020). A message that
-    doesn't name either must produce a clarification question and call no
-    tool at all (§9, done-when for Step 12)."""
+    doesn't name either must call resolve_driver_context to get real
+    shipment data, then ask a numbered disambiguation question built from
+    it — never a bare request for an order reference number."""
     from src.agent import build_agent_with_history
 
     thread_id = "DRV004-2026-08-04-test"
     recorder = ToolCallRecorder()
     agent = build_agent_with_history()
     response = agent.invoke(
-        {"input": "Hey, I'm running late, traffic is bad."},
+        {"input": "Hey, I'm running late, traffic is bad.", "current_datetime": "2026-08-04 04:30"},
         config={
             "configurable": {
                 # message_store.session_id is UUID-typed (langchain_postgres);
@@ -62,8 +63,12 @@ def test_drv004_ambiguous_message_asks_no_tool_call():
     )
     output = response["output"]
 
-    assert recorder.tool_calls == [], f"expected no tool calls, got {recorder.tool_calls}"
-    assert "?" in output, f"expected a clarifying question, got: {output!r}"
+    assert recorder.tool_calls == ["resolve_driver_context"], (
+        f"expected exactly one resolve_driver_context call, got {recorder.tool_calls}"
+    )
+    assert "SHP1004" in output and "SHP1020" in output, f"expected both shipment IDs, got: {output!r}"
+    assert "1️⃣" in output and "2️⃣" in output, f"expected numbered options, got: {output!r}"
+    assert "**" not in output, f"expected no markdown bold, got: {output!r}"
 
 
 def test_smoke_handle_message_returns_text():

@@ -16,6 +16,20 @@ from .holds import release_hold as _release_hold_rows
 
 CANCELLABLE_STATUSES = ("PENDING_CONFIRMATION", "CONFIRMED")
 
+# Plain-English phrasing for shipments.current_status, driver-facing (never
+# expose the raw enum or a guessed phrasing to the LLM — compute it here so
+# every caller sees the same wording).
+STATUS_LABELS = {
+    "PLANNED": "not dispatched yet",
+    "ASSIGNED": "scheduled",
+    "IN_TRANSIT": "on the way",
+    "AT_GATE": "checked in at the gate",
+    "WAITING": "at the gate",
+    "IN_DOCK": "unloading now",
+    "COMPLETED": "completed",
+    "CANCELLED": "cancelled",
+}
+
 
 def owns_shipment(con, shipment_id: str, driver_id: str) -> bool:
     row = con.execute(
@@ -28,10 +42,11 @@ def owns_shipment(con, shipment_id: str, driver_id: str) -> bool:
 def resolve_driver_context(con, driver_id: str) -> DriverContext:
     rows = con.execute(
         """
-        SELECT shipment_id, order_reference, current_status, priority_code
-        FROM shipments
-        WHERE driver_id = %s AND current_status NOT IN ('COMPLETED', 'CANCELLED')
-        ORDER BY created_at
+        SELECT s.shipment_id, s.order_reference, s.current_status, s.priority_code, f.city
+        FROM shipments s
+        JOIN facilities f ON f.facility_id = s.destination_facility_id
+        WHERE s.driver_id = %s AND s.current_status NOT IN ('COMPLETED', 'CANCELLED')
+        ORDER BY s.created_at
         """,
         (driver_id,),
     ).fetchall()
@@ -39,7 +54,14 @@ def resolve_driver_context(con, driver_id: str) -> DriverContext:
         status="driver_context",
         driver_id=driver_id,
         active_shipments=[
-            ShipmentSummary(shipment_id=r[0], order_reference=r[1], current_status=r[2], priority_code=r[3])
+            ShipmentSummary(
+                shipment_id=r[0],
+                order_reference=r[1],
+                current_status=r[2],
+                status_label=STATUS_LABELS.get(r[2], r[2].replace("_", " ").lower()),
+                destination_city=r[4],
+                priority_code=r[3],
+            )
             for r in rows
         ],
     )

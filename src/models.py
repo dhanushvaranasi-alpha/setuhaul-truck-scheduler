@@ -75,6 +75,8 @@ class ShipmentSummary(BaseModel):
     shipment_id: str
     order_reference: str
     current_status: str
+    status_label: str  # plain-English status, for driver-facing text
+    destination_city: str
     priority_code: str
 
 

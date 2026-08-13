@@ -5,6 +5,7 @@ import { getThreadState, listDrivers, sendChatMessage } from "@/lib/api";
 import type { Driver, ThreadState } from "@/lib/types";
 import { formatIstTime } from "@/lib/time";
 import { HoldCountdown } from "@/components/HoldCountdown";
+import { parseQuickReplies } from "@/lib/quickReplies";
 
 const STATUS_COLOR: Record<string, string> = {
   CONFIRMED: "text-green",
@@ -69,12 +70,12 @@ export default function ChatPage() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [state?.messages.length]);
 
-  const onSend = async () => {
-    if (!input.trim() || !driverId) return;
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || !driverId) return;
     setSending(true);
     setError(null);
     try {
-      await sendChatMessage(driverId, input.trim());
+      await sendChatMessage(driverId, text.trim());
       setInput("");
       await refresh(driverId);
     } catch (e) {
@@ -83,6 +84,15 @@ export default function ChatPage() {
       setSending(false);
     }
   };
+
+  const onSend = () => sendMessage(input);
+
+  const lastMessage = state?.messages[state.messages.length - 1];
+  const quickReplies =
+    lastMessage?.sender_type === "AGENT" ? parseQuickReplies(lastMessage.message_text) : null;
+  // Buttons are a shortcut, not a replacement — hide them while a request is
+  // in flight or as soon as the driver starts typing their own reply.
+  const showQuickReplies = quickReplies !== null && !sending && input.trim() === "";
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-4xl flex-col">
@@ -121,22 +131,36 @@ export default function ChatPage() {
               <p className="text-sm text-ink/40">No messages yet. Say what&apos;s going on.</p>
             )}
             {state?.messages.map((m, i) => (
-              <div
-                key={i}
-                className={`flex ${m.sender_type === "DRIVER" ? "justify-end" : "justify-start"}`}
-              >
+              <div key={i}>
                 <div
-                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-                    m.sender_type === "DRIVER"
-                      ? "bg-ink text-paper"
-                      : "border border-paper-dim bg-white text-ink"
-                  }`}
+                  className={`flex ${m.sender_type === "DRIVER" ? "justify-end" : "justify-start"}`}
                 >
-                  <p>{m.message_text}</p>
-                  <p className="mt-1 font-data text-[10px] opacity-50">
-                    {formatIstTime(m.message_ts)} IST
-                  </p>
+                  <div
+                    className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
+                      m.sender_type === "DRIVER"
+                        ? "bg-ink text-paper"
+                        : "border border-paper-dim bg-white text-ink"
+                    }`}
+                  >
+                    <p className="whitespace-pre-line">{m.message_text}</p>
+                    <p className="mt-1 font-data text-[10px] opacity-50">
+                      {formatIstTime(m.message_ts)} IST
+                    </p>
+                  </div>
                 </div>
+                {i === state.messages.length - 1 && showQuickReplies && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {quickReplies!.map((qr) => (
+                      <button
+                        key={qr.value}
+                        onClick={() => sendMessage(qr.value)}
+                        className="w-full rounded-lg border border-paper-dim bg-white px-3 py-2 text-left text-sm text-ink transition-colors active:bg-paper-dim"
+                      >
+                        {qr.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
