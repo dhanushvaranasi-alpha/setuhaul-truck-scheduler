@@ -106,6 +106,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                     const left = pctInWindow(s.span_start, window);
                     const right = pctInWindow(s.span_end, window);
                     const confirmed = s.status === "CONFIRMED";
+                    const pending = s.status === "PENDING_CONFIRMATION";
                     return (
                       <div
                         key={s.appointment_id}
@@ -119,6 +120,11 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                         {confirmed && (
                           <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
                             {s.shipment_id}
+                          </span>
+                        )}
+                        {pending && (
+                          <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
+                            ⏳ {s.shipment_id}
                           </span>
                         )}
                       </div>
