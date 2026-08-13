@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DockSpan, DockTimeline as DockTimelineData } from "@/lib/types";
 import { dayWindow, formatIstDate, formatIstTime, pctInWindow } from "@/lib/time";
 
@@ -18,7 +19,17 @@ const DOCK_TYPE_BADGE: Record<string, string> = {
   HEAVY: "text-paper/80 border-paper/30",
 };
 
+// Shipment requirement, shown in the hover tooltip — distinct from
+// DOCK_TYPE_BADGE above, which labels the dock's own capability, not what
+// a given load needs. STANDARD/ANY loads get no badge; nothing to call out.
+const REQUIREMENT_BADGE: Record<string, { emoji: string; color: string }> = {
+  REEFER: { emoji: "🔵", color: "text-slate" },
+  HEAVY: { emoji: "🟠", color: "text-amber" },
+};
+
 const HOUR_MARKS = [6, 9, 12, 15, 18, 21];
+
+type Hovered = { span: DockSpan; rect: DOMRect };
 
 export function DockTimeline({ data }: { data: DockTimelineData }) {
   const days = useMemo(() => {
@@ -29,6 +40,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
   }, [data]);
   const [dayLabel, setDayLabel] = useState(days[0]);
   const [selected, setSelected] = useState<DockSpan | null>(null);
+  const [hovered, setHovered] = useState<Hovered | null>(null);
 
   const anchorIso =
     data.spans.find((s) => formatIstDate(s.span_start) === dayLabel)?.span_start ??
@@ -110,7 +122,8 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                     return (
                       <div
                         key={s.appointment_id}
-                        title={`${s.shipment_id} · ${s.driver_name} · ${s.status} · ${formatIstTime(s.span_start)}-${formatIstTime(s.span_end)}`}
+                        onMouseEnter={(e) => setHovered({ span: s, rect: e.currentTarget.getBoundingClientRect() })}
+                        onMouseLeave={() => setHovered((h) => (h?.span.appointment_id === s.appointment_id ? null : h))}
                         onClick={confirmed ? () => setSelected(s) : undefined}
                         className={`absolute top-1.5 flex h-7 items-center overflow-hidden rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90 ${
                           confirmed ? "cursor-pointer ring-1 ring-inset ring-ink/0 hover:ring-ink/40" : ""
@@ -208,6 +221,35 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
           </button>
         </div>
       )}
+
+      {hovered &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 rounded border border-line bg-panel-raised px-2 py-1.5 font-data text-[11px] text-paper shadow-lg"
+            style={{
+              left: hovered.rect.left,
+              top: hovered.rect.top - 8,
+              transform: "translateY(-100%)",
+            }}
+          >
+            <div className="flex items-center gap-3">
+              <span>
+                {hovered.span.shipment_id} · {hovered.span.driver_name}
+              </span>
+              {REQUIREMENT_BADGE[hovered.span.required_dock_type] && (
+                <span className={REQUIREMENT_BADGE[hovered.span.required_dock_type].color}>
+                  {REQUIREMENT_BADGE[hovered.span.required_dock_type].emoji}{" "}
+                  {hovered.span.required_dock_type}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 text-paper/60">
+              {hovered.span.status} · {formatIstTime(hovered.span.span_start)}–
+              {formatIstTime(hovered.span.span_end)}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
