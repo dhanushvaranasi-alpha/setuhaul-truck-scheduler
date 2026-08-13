@@ -55,7 +55,7 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
         </div>
       </div>
 
-      <div className="relative flex-1 overflow-hidden rounded border border-line bg-panel">
+      <div className="relative overflow-hidden rounded border border-line bg-panel">
         {/* hour ruler */}
         <div className="relative h-5 border-b border-line">
           {HOUR_MARKS.map((h) => (

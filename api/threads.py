@@ -24,8 +24,24 @@ def _thread_state(query: dict) -> dict:
             (driver_id,),
         ).fetchall()
 
+        # Order by the thread's own last message, not opened_at: two threads
+        # can share the same opened_at under the demo's simulated clock (it
+        # doesn't advance between message sends), so opened_at alone isn't a
+        # reliable "most recent" signal. thread_id is a final deterministic
+        # tiebreak so the choice never depends on unspecified row order.
         thread_row = con.execute(
-            "SELECT thread_id FROM chat_threads WHERE driver_id = %s ORDER BY opened_at DESC LIMIT 1",
+            """
+            SELECT ct.thread_id
+            FROM chat_threads ct
+            LEFT JOIN (
+                SELECT thread_id, MAX(message_ts) AS last_message_ts
+                FROM chat_messages
+                GROUP BY thread_id
+            ) cm ON cm.thread_id = ct.thread_id
+            WHERE ct.driver_id = %s
+            ORDER BY COALESCE(cm.last_message_ts, ct.opened_at) DESC, ct.thread_id DESC
+            LIMIT 1
+            """,
             (driver_id,),
         ).fetchone()
         messages = []

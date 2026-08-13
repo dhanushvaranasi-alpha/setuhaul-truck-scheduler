@@ -62,7 +62,7 @@ export default function DashboardPage() {
       {!docks || !queue || !escalations || !metrics ? (
         <p className="p-6 text-sm text-paper/50">Loading...</p>
       ) : (
-        <div className="grid gap-4 p-4 lg:grid-cols-2 lg:grid-rows-[minmax(280px,1fr)_minmax(220px,1fr)]">
+        <div className="grid gap-4 p-4 lg:grid-cols-2 lg:grid-rows-[auto_minmax(220px,1fr)]">
           <div className="rounded-lg border border-line bg-panel-raised p-4 lg:col-span-2">
             <DockTimeline data={docks} />
           </div>
