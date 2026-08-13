@@ -2,6 +2,9 @@ import os
 import subprocess
 
 import psycopg
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DIRECT_URL = os.environ["DATABASE_URL"]  # direct (not pooled) for scripts
 SQL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
