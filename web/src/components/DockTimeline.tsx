@@ -117,29 +117,20 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
                   .map((s) => {
                     const left = pctInWindow(s.span_start, window);
                     const right = pctInWindow(s.span_end, window);
-                    const confirmed = s.status === "CONFIRMED";
                     const pending = s.status === "PENDING_CONFIRMATION";
                     return (
                       <div
                         key={s.appointment_id}
                         onMouseEnter={(e) => setHovered({ span: s, rect: e.currentTarget.getBoundingClientRect() })}
                         onMouseLeave={() => setHovered((h) => (h?.span.appointment_id === s.appointment_id ? null : h))}
-                        onClick={confirmed ? () => setSelected(s) : undefined}
-                        className={`absolute top-1.5 flex h-7 items-center overflow-hidden rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90 ${
-                          confirmed ? "cursor-pointer ring-1 ring-inset ring-ink/0 hover:ring-ink/40" : ""
-                        }`}
+                        onClick={() => setSelected(s)}
+                        className={`absolute top-1.5 flex h-7 cursor-pointer items-center overflow-hidden rounded-sm ${STATUS_BAR[s.status] ?? "bg-slate"} opacity-90 ring-1 ring-inset ring-ink/0 hover:ring-ink/40`}
                         style={{ left: `${left}%`, width: `${Math.max(right - left, 0.6)}%` }}
                       >
-                        {confirmed && (
-                          <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
-                            {s.shipment_id}
-                          </span>
-                        )}
-                        {pending && (
-                          <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
-                            ⏳ {s.shipment_id}
-                          </span>
-                        )}
+                        <span className="truncate px-1 font-data text-[9px] leading-none text-ink/80">
+                          {pending && "⏳ "}
+                          {s.shipment_id}
+                        </span>
                       </div>
                     );
                   })}
@@ -168,6 +159,9 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
           <span className="h-2 w-2 rounded-sm bg-green" /> confirmed
         </span>
         <span className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-sm bg-slate" /> in progress
+        </span>
+        <span className="flex items-center gap-1">
           <span className="h-2 w-2 rounded-sm bg-amber" /> pending
         </span>
         <span className="flex items-center gap-1">
@@ -184,43 +178,42 @@ export function DockTimeline({ data }: { data: DockTimelineData }) {
         </span>
       </div>
 
-      {selected && (
-        <div className="mt-2 flex items-start justify-between rounded border border-green/40 bg-green/10 px-3 py-2">
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-data text-[11px] text-paper/80 sm:grid-cols-4">
-            <div>
-              <dt className="text-paper/40">shipment</dt>
-              <dd>{selected.shipment_id}</dd>
-            </div>
-            <div>
-              <dt className="text-paper/40">driver</dt>
-              <dd>
-                {selected.driver_name} ({selected.driver_id})
-              </dd>
-            </div>
-            <div>
-              <dt className="text-paper/40">appointment</dt>
-              <dd>{selected.appointment_id}</dd>
-            </div>
-            <div>
-              <dt className="text-paper/40">dock</dt>
-              <dd>{data.docks.find((d) => d.dock_id === selected.dock_id)?.dock_code ?? selected.dock_id}</dd>
-            </div>
-            <div>
-              <dt className="text-paper/40">span</dt>
-              <dd>
-                {formatIstTime(selected.span_start)}–{formatIstTime(selected.span_end)}
-              </dd>
-            </div>
-          </dl>
-          <button
-            onClick={() => setSelected(null)}
-            aria-label="Close"
-            className="ml-2 shrink-0 text-paper/40 hover:text-paper"
-          >
-            ×
-          </button>
-        </div>
-      )}
+      <div className="mt-2 flex h-[76px] items-start justify-between rounded border border-line bg-panel px-3 py-2">
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 font-data text-[11px] text-paper/80 sm:grid-cols-4">
+          <div>
+            <dt className="text-paper/40">Shipment</dt>
+            <dd>{selected?.shipment_id ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-paper/40">Driver</dt>
+            <dd>{selected ? `${selected.driver_name} (${selected.driver_id})` : "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-paper/40">Appointment</dt>
+            <dd>{selected?.appointment_id ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-paper/40">Dock</dt>
+            <dd>
+              {selected
+                ? (data.docks.find((d) => d.dock_id === selected.dock_id)?.dock_code ?? selected.dock_id)
+                : "—"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-paper/40">Span</dt>
+            <dd>{selected ? `${formatIstTime(selected.span_start)}–${formatIstTime(selected.span_end)}` : "—"}</dd>
+          </div>
+        </dl>
+        <button
+          onClick={() => setSelected(null)}
+          aria-label="Close"
+          disabled={!selected}
+          className="ml-2 shrink-0 text-paper/40 hover:text-paper disabled:opacity-0"
+        >
+          ×
+        </button>
+      </div>
 
       {hovered &&
         createPortal(

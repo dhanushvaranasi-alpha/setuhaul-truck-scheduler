@@ -26,6 +26,35 @@ def sweep_expired_holds(con, dock_id: str, clock: Clock) -> int:
     ).rowcount
 
 
+def resolve_offered_option(con, shipment_id: str, option_number: int) -> str | None:
+    """Looks up the option_token for the Nth (1-indexed) option from this
+    shipment's most recent find_feasible_slots call, logged to
+    agent_actions. option_number is the only thing the LLM needs to supply
+    — the raw signed token was never part of its conversation history to
+    begin with (RunnableWithMessageHistory only persists the final
+    natural-language reply between turns, never the intermediate tool JSON),
+    so requiring the LLM to reproduce it verbatim is exactly the kind of
+    argument a tool should never need (see find_active_hold_group above)."""
+    row = con.execute(
+        """
+        SELECT result_json FROM agent_actions
+        WHERE tool_name = 'find_feasible_slots' AND status = 'SUCCESS'
+          AND arguments_json->>'shipment_id' = %s
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (shipment_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    result = row[0]
+    if result.get("status") != "options":
+        return None
+    spans = result.get("spans", [])
+    if not (1 <= option_number <= len(spans)):
+        return None
+    return spans[option_number - 1]["option_token"]
+
+
 def find_active_hold_group(con, shipment_id: str) -> str | None:
     """create_hold enforces one active hold group per shipment (a new hold
     supersedes any prior one), so this is unambiguous. Looked up from

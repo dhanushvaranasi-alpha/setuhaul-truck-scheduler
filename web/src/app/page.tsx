@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getThreadState, listDrivers, sendChatMessage } from "@/lib/api";
-import type { Driver, ThreadState } from "@/lib/types";
+import type { ChatMessage, Driver, ThreadState } from "@/lib/types";
 import { formatIstTime } from "@/lib/time";
 import { HoldCountdown } from "@/components/HoldCountdown";
 import { HoldConfirmationMessage } from "@/components/HoldConfirmationMessage";
@@ -35,12 +35,28 @@ export default function ChatPage() {
 
   const inFlight = pending !== null && !pending.failed;
 
+  // Clears local state immediately on switch, then the effect below fetches
+  // this driver's history fresh from the server — no local cache, so there
+  // is nothing that can carry one driver's messages into another's thread.
+  // Called from event handlers / promise callbacks, never from inside a
+  // useEffect body directly, per react-hooks/set-state-in-effect.
+  const selectDriver = (id: string) => {
+    setDriverId(id);
+    setState(null);
+    setInput("");
+    setPending(null);
+    setError(null);
+  };
+
   useEffect(() => {
     let cancelled = false;
     listDrivers()
       .then((r) => {
         if (cancelled) return;
         setDrivers(r.drivers);
+        // Direct setDriverId, not selectDriver — state is already null on
+        // first load, and calling selectDriver here would pull it into
+        // this effect's dependencies unnecessarily.
         if (r.drivers.length > 0) setDriverId(r.drivers[0].driver_id);
       })
       .catch((e) => !cancelled && setError(String(e)));
@@ -66,9 +82,6 @@ export default function ChatPage() {
       .then((s) => {
         if (!cancelled) {
           setState(s);
-          setInput("");
-          setPending(null);
-          setError(null);
         }
       })
       .catch((e) => !cancelled && setError(String(e)));
@@ -87,9 +100,17 @@ export default function ChatPage() {
     setInput("");
     setPending({ text: trimmed, failed: false });
     try {
-      await sendChatMessage(driverId, trimmed);
-      await refresh(driverId);
+      const { reply } = await sendChatMessage(driverId, trimmed);
+      const now = new Date().toISOString();
+      const exchange: ChatMessage[] = [
+        { sender_type: "DRIVER", message_text: trimmed, message_ts: now },
+        { sender_type: "AGENT", message_text: reply, message_ts: now },
+      ];
+      // Append immediately — never wait on a re-fetch to show the message
+      // that was just sent, and never replace the list wholesale.
+      setState((prev) => (prev ? { ...prev, messages: [...prev.messages, ...exchange] } : prev));
       setPending(null);
+      await refresh(driverId);
     } catch {
       setPending({ text: trimmed, failed: true });
     }
@@ -120,7 +141,7 @@ export default function ChatPage() {
           <select
             id="driver"
             value={driverId}
-            onChange={(e) => setDriverId(e.target.value)}
+            onChange={(e) => selectDriver(e.target.value)}
             className="rounded border border-paper-dim bg-white px-2 py-1.5 font-data text-sm"
           >
             {drivers.map((d) => (

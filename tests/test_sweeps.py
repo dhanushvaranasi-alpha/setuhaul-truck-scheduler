@@ -32,6 +32,7 @@ def _clear(shipment_id, appointment_id=None):
         )
         con.execute("DELETE FROM escalations WHERE shipment_id = %s", (shipment_id,))
         con.execute("DELETE FROM slot_holds WHERE shipment_id = %s", (shipment_id,))
+        con.execute("DELETE FROM chat_threads WHERE shipment_id = %s", (shipment_id,))
         if appointment_id:
             con.execute("DELETE FROM pending_warehouse_replies WHERE appointment_id = %s", (appointment_id,))
             con.execute("DELETE FROM operational_messages WHERE appointment_id = %s", (appointment_id,))
@@ -89,7 +90,7 @@ def _clear_synthetic_shipment(shipment_id: str) -> None:
 
 
 def test_sweep_holds_expires_and_notifies():
-    shipment_id = "SHP1017"  # THR011 seeded, OPEN
+    shipment_id = "SHP1017"  # DRV001
     clock = SimulatedClock()
     span_start = clock.now().astimezone(IST).replace(
         year=2026, month=8, day=6, hour=13, minute=0, second=0, microsecond=0
@@ -97,6 +98,15 @@ def test_sweep_holds_expires_and_notifies():
     span_end = span_start + timedelta(minutes=15)
     _clear(shipment_id)
     try:
+        with db.get_conn() as con:
+            con.execute(
+                """
+                INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, thread_status, thread_intent)
+                VALUES (%s, 'DRV001', %s, %s, 'OPEN', 'REPORT_DELAY')
+                """,
+                (f"THR-{shipment_id}", shipment_id, clock.now()),
+            )
+            con.commit()
         with db.get_conn() as con:
             held = create_hold(
                 con,
@@ -189,6 +199,15 @@ def test_sweep_escalations_advances_ladder():
     clock = SimulatedClock()
     _clear(shipment_id)
     try:
+        with db.get_conn() as con:
+            con.execute(
+                """
+                INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, thread_status, thread_intent)
+                VALUES (%s, 'DRV003', %s, %s, 'OPEN', 'REPORT_DELAY')
+                """,
+                (thread_id, shipment_id, clock.now()),
+            )
+            con.commit()
         with db.get_conn() as con:
             result = escalate_to_human(con, thread_id, "NO_FEASIBLE_SLOT", {}, clock)
             con.commit()

@@ -52,10 +52,15 @@ def _thread_state(query: dict) -> dict:
         thread_id = None
         if thread_row:
             thread_id = thread_row[0]
+            # message_ts alone is not a reliable sort key: under the demo's
+            # simulated clock (frozen between requests) many messages in the
+            # same thread share an identical message_ts, so ties need a
+            # deterministic tiebreaker — created_at is real wall-clock
+            # insertion time, which is always distinct and monotonic.
             messages = con.execute(
                 """
                 SELECT sender_type, message_text, message_ts FROM chat_messages
-                WHERE thread_id = %s ORDER BY message_ts
+                WHERE thread_id = %s ORDER BY message_ts, created_at
                 """,
                 (thread_id,),
             ).fetchall()

@@ -4,6 +4,12 @@ function minutesLeft(now: string, dueAt: string): number {
   return Math.round((new Date(dueAt).getTime() - new Date(now).getTime()) / 60000);
 }
 
+function dueLabel(now: string, dueAt: string, overdue: boolean): string {
+  const mins = Math.abs(minutesLeft(now, dueAt));
+  if (mins === 0) return "due now";
+  return overdue ? `+${mins}m overdue` : `${mins}m left`;
+}
+
 export function EscalationsPanel({ data }: { data: EscalationsResponse }) {
   return (
     <div className="flex h-full flex-col">
@@ -13,7 +19,6 @@ export function EscalationsPanel({ data }: { data: EscalationsResponse }) {
           <p className="text-xs text-paper/40">None open — nothing waiting on dispatch.</p>
         )}
         {data.escalations.map((e) => {
-          const mins = minutesLeft(data.now, e.acknowledge_due_at);
           return (
             <div
               key={e.escalation_id}
@@ -26,7 +31,7 @@ export function EscalationsPanel({ data }: { data: EscalationsResponse }) {
                   {e.shipment_id ?? "unassigned"}
                 </span>
                 <span className={`font-data text-xs ${e.overdue ? "text-red" : "text-paper/50"}`}>
-                  {e.overdue ? `+${Math.abs(mins)}m overdue` : `${mins}m left`}
+                  {dueLabel(data.now, e.acknowledge_due_at, e.overdue)}
                 </span>
               </div>
               <p className="mt-0.5 text-[11px] text-paper/60">{e.reason_code}</p>

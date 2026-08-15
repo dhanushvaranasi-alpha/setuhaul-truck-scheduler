@@ -6,7 +6,12 @@ import { formatIstTime } from "@/lib/time";
 import { triggerAdminTick } from "@/lib/api";
 
 function minutesPending(now: string, bookedAt: string): number {
-  return Math.max(0, Math.round((new Date(now).getTime() - new Date(bookedAt).getTime()) / 60000));
+  return Math.round((new Date(now).getTime() - new Date(bookedAt).getTime()) / 60000);
+}
+
+function pendingLabel(now: string, bookedAt: string): string {
+  const mins = minutesPending(now, bookedAt);
+  return mins <= 0 ? "just now" : `pending ${mins} min`;
 }
 
 export function PendingConfirmationPanel({
@@ -58,7 +63,7 @@ export function PendingConfirmationPanel({
                 {p.span_end && `–${formatIstTime(p.span_end)}`} IST
               </span>
               <span className="font-data text-[10px] text-amber">
-                pending {minutesPending(data.now, p.booked_at)} min
+                {pendingLabel(data.now, p.booked_at)}
               </span>
             </div>
             <button

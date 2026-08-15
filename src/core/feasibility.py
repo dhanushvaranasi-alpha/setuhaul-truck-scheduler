@@ -1,5 +1,8 @@
+import time  # TEMPORARY — diagnostic instrumentation, see agent.py's TimingCallbackHandler
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime
+from datetime import time as dt_time
+from datetime import timedelta
 
 from clock import IST, Clock
 from ..config import get_operating_constants
@@ -31,6 +34,8 @@ class DockCandidate:
     dock_id: str
     dock_code: str
     dock_type: str
+    supports_refrigerated: bool
+    max_vehicle_weight_kg: int
 
 
 @dataclass(frozen=True)
@@ -124,7 +129,15 @@ def get_candidate_docks(con, ctx: ShipmentContext) -> list[DockCandidate]:
             continue  # F6
         if not dock_type_matches(ctx.required_dock_type, dock_type):
             continue  # F7
-        candidates.append(DockCandidate(dock_id=dock_id, dock_code=dock_code, dock_type=dock_type))
+        candidates.append(
+            DockCandidate(
+                dock_id=dock_id,
+                dock_code=dock_code,
+                dock_type=dock_type,
+                supports_refrigerated=supports_refrigerated,
+                max_vehicle_weight_kg=max_weight,
+            )
+        )
     return candidates
 
 
@@ -195,17 +208,107 @@ def build_span_candidates(
     return candidates
 
 
+@dataclass(frozen=True)
+class SpanEvalBatch:
+    """Facility- and dock-level data that's identical for every candidate
+    span evaluate_span checks within one _search_window call — fetched
+    once per dock (facility hours/last-start once per whole search)
+    instead of once per candidate. Root cause of the /api/chat latency
+    investigation: without this, find_feasible_slots ran 7 queries x every
+    candidate (287 sequential round-trips for one real search — see
+    RUNBOOK/agent.py timing notes). Only used by _search_window; the two
+    single-span re-validation callers (booking.py, sweeps.py) still pass
+    batch=None and get the original always-fresh per-call queries, since
+    N=1 there and re-validation freshness matters more than round-trip
+    count."""
+
+    open_time: dt_time
+    close_time: dt_time
+    last_start: tuple[int, int] | None
+    blocked_windows: list[tuple[datetime, datetime]]
+    slot_status: dict[str, str]
+    occupied_slot_ids: set[str]
+    held_slot_ids: set[str]
+
+
+def _fetch_blocked_windows(
+    con, dock_id: str, window_start: datetime, window_end: datetime
+) -> list[tuple[datetime, datetime]]:
+    """F9's per-candidate query, batched: every BREAKDOWN/MAINTENANCE event
+    overlapping the whole search window for this dock, fetched once. Any
+    candidate span is a subset of [window_start, window_end), so this is a
+    superset of what a per-candidate query would ever need — the overlap
+    check itself still runs per-candidate, just against pre-fetched rows."""
+    rows = con.execute(
+        """
+        SELECT event_start_ts, COALESCE(event_end_ts, 'infinity'::timestamptz)
+        FROM dock_status_events
+        WHERE dock_id = %s AND event_type = ANY(%s)
+          AND event_start_ts < %s
+          AND COALESCE(event_end_ts, 'infinity'::timestamptz) > %s
+        """,
+        (dock_id, list(BLOCKING_EVENT_TYPES), window_end, window_start),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def _fetch_slot_status(con, slot_ids: list[str]) -> dict[str, str]:
+    """F10's per-candidate query, batched over every open slot for the dock
+    in one call."""
+    if not slot_ids:
+        return {}
+    rows = con.execute(
+        "SELECT slot_id, slot_status FROM appointment_slots WHERE slot_id = ANY(%s)",
+        (slot_ids,),
+    ).fetchall()
+    return dict(rows)
+
+
+def _fetch_occupied_slot_ids(con, slot_ids: list[str]) -> set[str]:
+    """F11's per-candidate query, batched."""
+    if not slot_ids:
+        return set()
+    rows = con.execute(
+        """
+        SELECT al.slot_id FROM appointment_slot_allocations al
+        JOIN appointments a ON a.appointment_id = al.appointment_id
+        WHERE al.slot_id = ANY(%s) AND a.is_current AND a.appointment_status = ANY(%s)
+        """,
+        (slot_ids, list(ACTIVE_APPOINTMENT_STATUSES)),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _fetch_held_slot_ids(con, slot_ids: list[str], shipment_id: str, clock: Clock) -> set[str]:
+    """F12's per-candidate query, batched."""
+    if not slot_ids:
+        return set()
+    rows = con.execute(
+        """
+        SELECT slot_id FROM slot_holds
+        WHERE slot_id = ANY(%s) AND hold_status = 'ACTIVE' AND expires_at > %s
+          AND shipment_id <> %s
+        """,
+        (slot_ids, clock.now(), shipment_id),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def evaluate_span(
     con,
     ctx: ShipmentContext,
     span: SpanCandidate,
     clock: Clock,
     exclude_appointment_id: str | None = None,
+    batch: SpanEvalBatch | None = None,
 ) -> list[str]:
     """All 13 predicates against the whole span (I7). Returns failing reason
     codes. Pass exclude_appointment_id when re-validating an *existing*
     appointment before confirming it (I6) — otherwise F11 would flag the
-    appointment's own allocation as occupying its own slot."""
+    appointment's own allocation as occupying its own slot. Pass batch
+    (SpanEvalBatch) when called from the _search_window hot loop, where
+    F2/F3/F9/F10/F11/F12's data has already been fetched once for the
+    whole dock/window rather than fresh per call."""
     failures: list[str] = []
     constants = get_operating_constants()
 
@@ -217,12 +320,15 @@ def evaluate_span(
     # from Postgres with UTC tzinfo, so convert before comparing time-of-day.
     span_start_ist = span.span_start.astimezone(IST)
     span_end_ist = span.span_end.astimezone(IST)
-    open_time, close_time = get_facility_hours(con, ctx.facility_id)
+    if batch is not None:
+        open_time, close_time = batch.open_time, batch.close_time
+    else:
+        open_time, close_time = get_facility_hours(con, ctx.facility_id)
     if span_start_ist.time() < open_time or span_end_ist.time() > close_time:
         failures.append("OUTSIDE_OPERATING_HOURS")
 
     # F3
-    last_start = get_last_new_start_time(con, ctx.facility_id)
+    last_start = batch.last_start if batch is not None else get_last_new_start_time(con, ctx.facility_id)
     if last_start is not None:
         hour, minute = last_start
         if span_start_ist.time() >= span_start_ist.replace(
@@ -231,12 +337,13 @@ def evaluate_span(
             failures.append("AFTER_LAST_START_TIME")
 
     # F4, F6, F7 (redundant with candidate-dock filtering, kept for
-    # booking-time revalidation of an already-chosen span)
-    dock_row = con.execute(
-        "SELECT dock_type, supports_refrigerated, max_vehicle_weight_kg FROM docks WHERE dock_id = %s",
-        (span.dock.dock_id,),
-    ).fetchone()
-    dock_type, supports_refrigerated, max_weight = dock_row
+    # booking-time revalidation of an already-chosen span). span.dock
+    # already carries these — from get_candidate_docks's own query when
+    # this came through _search_window, or from a fresh per-call query at
+    # the two single-span call sites — so no DB hit needed here either way.
+    dock_type = span.dock.dock_type
+    supports_refrigerated = span.dock.supports_refrigerated
+    max_weight = span.dock.max_vehicle_weight_kg
     if ctx.temperature_control_required and not supports_refrigerated:
         failures.append("REEFER_REQUIRED")
     if ctx.load_weight_kg > max_weight:
@@ -249,52 +356,81 @@ def evaluate_span(
         failures.append("INSUFFICIENT_DURATION")
 
     # F9 (I12: only BREAKDOWN/MAINTENANCE block; I7: whole span, not just first slot)
-    event = con.execute(
-        """
-        SELECT 1 FROM dock_status_events
-        WHERE dock_id = %s AND event_type = ANY(%s)
-          AND event_start_ts < %s
-          AND COALESCE(event_end_ts, 'infinity'::timestamptz) > %s
-        LIMIT 1
-        """,
-        (span.dock.dock_id, list(BLOCKING_EVENT_TYPES), span.span_end, span.span_start),
-    ).fetchone()
+    if batch is not None:
+        event = any(
+            event_start < span.span_end and event_end > span.span_start
+            for event_start, event_end in batch.blocked_windows
+        )
+    else:
+        event = (
+            con.execute(
+                """
+                SELECT 1 FROM dock_status_events
+                WHERE dock_id = %s AND event_type = ANY(%s)
+                  AND event_start_ts < %s
+                  AND COALESCE(event_end_ts, 'infinity'::timestamptz) > %s
+                LIMIT 1
+                """,
+                (span.dock.dock_id, list(BLOCKING_EVENT_TYPES), span.span_end, span.span_start),
+            ).fetchone()
+            is not None
+        )
     if event:
         failures.append("DOCK_UNAVAILABLE")
 
     # F10 (I7: every slot)
-    blocked = con.execute(
-        "SELECT 1 FROM appointment_slots WHERE slot_id = ANY(%s) AND slot_status <> 'OPEN' LIMIT 1",
-        (span.slot_ids,),
-    ).fetchone()
+    if batch is not None:
+        blocked = any(batch.slot_status.get(sid) != "OPEN" for sid in span.slot_ids)
+    else:
+        blocked = (
+            con.execute(
+                "SELECT 1 FROM appointment_slots WHERE slot_id = ANY(%s) AND slot_status <> 'OPEN' LIMIT 1",
+                (span.slot_ids,),
+            ).fetchone()
+            is not None
+        )
     if blocked:
         failures.append("SLOT_BLOCKED")
 
-    # F11 (I7: every slot)
-    occupied = con.execute(
-        """
-        SELECT 1 FROM appointment_slot_allocations al
-        JOIN appointments a ON a.appointment_id = al.appointment_id
-        WHERE al.slot_id = ANY(%s) AND a.is_current AND a.appointment_status = ANY(%s)
-          AND a.appointment_id IS DISTINCT FROM %s
-        LIMIT 1
-        """,
-        (span.slot_ids, list(ACTIVE_APPOINTMENT_STATUSES), exclude_appointment_id),
-    ).fetchone()
+    # F11 (I7: every slot). exclude_appointment_id is never set on the
+    # batch path — _search_window only searches for new spans, it never
+    # re-validates an existing appointment's own allocation.
+    if batch is not None:
+        occupied = any(sid in batch.occupied_slot_ids for sid in span.slot_ids)
+    else:
+        occupied = (
+            con.execute(
+                """
+                SELECT 1 FROM appointment_slot_allocations al
+                JOIN appointments a ON a.appointment_id = al.appointment_id
+                WHERE al.slot_id = ANY(%s) AND a.is_current AND a.appointment_status = ANY(%s)
+                  AND a.appointment_id IS DISTINCT FROM %s
+                LIMIT 1
+                """,
+                (span.slot_ids, list(ACTIVE_APPOINTMENT_STATUSES), exclude_appointment_id),
+            ).fetchone()
+            is not None
+        )
     if occupied:
         failures.append("SLOT_OCCUPIED")
 
     # F12 (I7, I8: unexpired only — expiry checked here at read time, not via
     # an index predicate)
-    held = con.execute(
-        """
-        SELECT 1 FROM slot_holds
-        WHERE slot_id = ANY(%s) AND hold_status = 'ACTIVE' AND expires_at > %s
-          AND shipment_id <> %s
-        LIMIT 1
-        """,
-        (span.slot_ids, clock.now(), ctx.shipment_id),
-    ).fetchone()
+    if batch is not None:
+        held = any(sid in batch.held_slot_ids for sid in span.slot_ids)
+    else:
+        held = (
+            con.execute(
+                """
+                SELECT 1 FROM slot_holds
+                WHERE slot_id = ANY(%s) AND hold_status = 'ACTIVE' AND expires_at > %s
+                  AND shipment_id <> %s
+                LIMIT 1
+                """,
+                (span.slot_ids, clock.now(), ctx.shipment_id),
+            ).fetchone()
+            is not None
+        )
     if held:
         failures.append("SLOT_HELD")
 
@@ -314,24 +450,107 @@ def evaluate_span(
 def _search_window(
     con, ctx: ShipmentContext, clock: Clock, window_start: datetime, window_end: datetime
 ) -> list[SpanCandidate]:
+    t_docks = time.time()
     docks = get_candidate_docks(con, ctx)
+    print(f"[timing]   get_candidate_docks: {time.time() - t_docks:.3f}s ({len(docks)} docks)")
+
+    # F2/F3 are facility-level — identical for every dock and every
+    # candidate in this call, so fetched once instead of once per candidate.
+    open_time, close_time = get_facility_hours(con, ctx.facility_id)
+    last_start = get_last_new_start_time(con, ctx.facility_id)
+
     feasible = []
+    candidates_evaluated = 0
+    t_eval_total = 0.0
     for dock in docks:
+        t_slots = time.time()
         slots = get_open_slots(con, dock.dock_id, window_start, window_end)
-        for span in build_span_candidates(dock, slots, ctx.expected_unload_min):
-            if not evaluate_span(con, ctx, span, clock):
+        slots_dt = time.time() - t_slots
+        candidates = build_span_candidates(dock, slots, ctx.expected_unload_min)
+        print(
+            f"[timing]   get_open_slots({dock.dock_code}): {slots_dt:.3f}s "
+            f"({len(slots)} open slots -> {len(candidates)} span candidates)"
+        )
+        if not candidates:
+            continue
+
+        # F9/F10/F11/F12 are dock+window-level — batched once per dock here
+        # instead of once per candidate span (was the N+1 hot path: 7
+        # queries x every candidate, ~287 round-trips for one real search).
+        t_batch = time.time()
+        slot_ids = [s.slot_id for s in slots]
+        batch = SpanEvalBatch(
+            open_time=open_time,
+            close_time=close_time,
+            last_start=last_start,
+            blocked_windows=_fetch_blocked_windows(con, dock.dock_id, window_start, window_end),
+            slot_status=_fetch_slot_status(con, slot_ids),
+            occupied_slot_ids=_fetch_occupied_slot_ids(con, slot_ids),
+            held_slot_ids=_fetch_held_slot_ids(con, slot_ids, ctx.shipment_id, clock),
+        )
+        print(f"[timing]   batch fetch ({dock.dock_code}): {time.time() - t_batch:.3f}s")
+
+        for span in candidates:
+            t_eval = time.time()
+            ok = not evaluate_span(con, ctx, span, clock, batch=batch)
+            t_eval_total += time.time() - t_eval
+            candidates_evaluated += 1
+            if ok:
                 feasible.append(span)
+    print(
+        f"[timing]   evaluate_span total: {t_eval_total:.3f}s over {candidates_evaluated} candidates "
+        f"({t_eval_total / candidates_evaluated * 1000:.0f}ms/candidate)"
+        if candidates_evaluated
+        else "[timing]   evaluate_span: 0 candidates"
+    )
     feasible.sort(key=lambda s: s.span_start)
     return feasible
 
 
-def find_feasible_slots_impl(shipment_id: str, earliest_ts: str | None, clock: Clock) -> ToolResult:
+def find_feasible_slots_impl(
+    shipment_id: str, earliest_ts: str | None, clock: Clock, trigger_reason: str | None = None
+) -> ToolResult:
     from .. import db
+    from . import driver_context as dc
 
     constants = get_operating_constants()
     with db.get_conn() as con:
+        # A driver's claim that their dock is broken must be verified against
+        # actual dock events, not taken on faith — enforced here in code
+        # rather than only in the system prompt, since an LLM applies the
+        # "verify before acting" rule inconsistently once other signals
+        # (on-site, missed slot) make the claim feel plausible enough to
+        # skip checking. The caller must tag the call DOCK_FAULT for this
+        # gate to run — the LLM still decides *that* a dock-fault claim was
+        # made (unavoidable, since that's derived from the driver's own
+        # words), but not whether the claim is true.
+        if trigger_reason == "DOCK_FAULT":
+            state = dc.get_shipment_state(con, shipment_id, clock)
+            if not state.active_dock_events:
+                return Rejected(
+                    status="rejected",
+                    reason="UNVERIFIED_DOCK_FAULT",
+                    detail=(
+                        "No fault is recorded on your assigned dock. "
+                        "Please confirm with the dock supervisor."
+                    ),
+                )
+
         ctx = get_shipment_context(con, shipment_id)
-        if earliest_ts is not None:
+
+        # A driver already on site is searched from now, never from a
+        # declared/asked arrival time — enforced here in code rather than
+        # only in the system prompt, since an LLM applies a prompt rule
+        # inconsistently across queue states; gate_in_ts being set always
+        # wins over whatever earliest_ts the caller passed (or omitted).
+        gate_in_row = con.execute(
+            "SELECT gate_in_ts FROM facility_checkins WHERE shipment_id = %s", (shipment_id,)
+        ).fetchone()
+        on_site = gate_in_row is not None and gate_in_row[0] is not None
+
+        if on_site:
+            ctx = replace(ctx, effective_eta_ts=clock.now())
+        elif earliest_ts is not None:
             ctx = replace(ctx, effective_eta_ts=datetime.fromisoformat(earliest_ts))
 
         band_start = ctx.effective_eta_ts + timedelta(minutes=constants.eta_buffer_minutes)

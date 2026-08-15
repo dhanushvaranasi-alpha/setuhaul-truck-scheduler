@@ -86,16 +86,65 @@ class DriverContext(BaseModel):
     active_shipments: list[ShipmentSummary]
 
 
-class ShipmentState(BaseModel):
-    status: Literal["shipment_state"]
+class ShipmentInfo(BaseModel):
     shipment_id: str
     current_status: str
-    appointment_status: str | None
-    dock_code: str | None
-    span_start: str | None
-    span_end: str | None
-    effective_eta: str
+    required_dock_type: str
+    temperature_control_required: bool
+    load_weight_kg: int
+    expected_unload_min: int
+    priority_code: str
+
+
+class CurrentAppointment(BaseModel):
+    appointment_id: str
+    appointment_status: str
+    dock_code: str
+    span_start_ts: str | None
+    span_end_ts: str | None
+
+
+class LatestEta(BaseModel):
+    effective_eta_ts: str
     eta_confidence: str
+    eta_source: str
+
+
+class Checkin(BaseModel):
+    gate_in_ts: str | None
+    queue_state: str | None
+    actual_dock_id: str | None
+
+
+class ActiveDockEvent(BaseModel):
+    event_type: str
+    reason: str
+    event_start_ts: str
+    event_end_ts: str | None
+
+
+class PendingNotification(BaseModel):
+    delivery_status: str
+    sent_at: str
+
+
+class ActiveEscalation(BaseModel):
+    escalation_id: str
+    reason_code: str
+    status: str
+    created_at: str
+    assigned_contact_id: str | None
+
+
+class ShipmentState(BaseModel):
+    status: Literal["shipment_state"]
+    shipment: ShipmentInfo
+    current_appointment: CurrentAppointment | None
+    latest_eta: LatestEta | None
+    checkin: Checkin | None
+    active_dock_events: list[ActiveDockEvent]
+    pending_notification: PendingNotification | None
+    active_escalation: ActiveEscalation | None
 
 
 class Recorded(BaseModel):

@@ -8,7 +8,7 @@ from src.core.escalation import REASON_CODES, escalate_to_human
 from src.core.holds import create_hold
 from src.reset_demo import reset_demo
 
-THREAD_ID = "THR007"  # DRV003 / SHP1003, seeded
+THREAD_ID = "THR007"  # DRV003 / SHP1003 — created by this module's own fixture
 SHIPMENT_ID = "SHP1003"
 DOCK_ID = "DOCK-JAI-D1"
 SLOT_ID = "SLOT-D1-20260806-1100"
@@ -17,10 +17,20 @@ SLOT_ID = "SLOT-D1-20260806-1100"
 @pytest.fixture(scope="module", autouse=True)
 def clean_db():
     reset_demo()
+    with db.get_conn() as con:
+        con.execute(
+            """
+            INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, thread_status, thread_intent)
+            VALUES (%s, 'DRV003', %s, now(), 'OPEN', 'REPORT_DELAY')
+            """,
+            (THREAD_ID, SHIPMENT_ID),
+        )
+        con.commit()
     yield
     with db.get_conn() as con:
         con.execute("DELETE FROM escalations WHERE thread_id = %s", (THREAD_ID,))
         con.execute("DELETE FROM slot_holds WHERE shipment_id = %s", (SHIPMENT_ID,))
+        con.execute("DELETE FROM chat_threads WHERE thread_id = %s", (THREAD_ID,))
         con.commit()
 
 

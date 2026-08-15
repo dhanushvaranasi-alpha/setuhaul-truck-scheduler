@@ -1,4 +1,3 @@
-import json
 import uuid
 from datetime import timedelta
 from typing import Literal
@@ -13,7 +12,7 @@ from .core import driver_context as dc
 from .core import escalation as esc
 from .core.booking import log_action, request_booking, reschedule_appointment
 from .core.feasibility import find_feasible_slots_impl
-from .core.holds import create_hold
+from .core.holds import create_hold, resolve_offered_option
 from .core.tokens import verify_option_token
 from .models import Rejected
 
@@ -58,12 +57,17 @@ def resolve_driver_context() -> dict:
 
 @tool
 def get_shipment_state(shipment_id: str) -> dict:
-    """Fetch the current status, ETA, and appointment (if any) for a shipment."""
+    """Fetch complete operational context for a shipment: status, ETA,
+    current appointment, gate/queue check-in state, any active events on its
+    assigned dock, pending warehouse-confirmation status, and any open
+    escalation on this shipment. Always call this before deciding what to
+    ask the driver or what to tell them."""
     driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "get_shipment_state", {"shipment_id": shipment_id})
-        result = dc.get_shipment_state(con, shipment_id)
+        clock = get_clock(con)
+        result = dc.get_shipment_state(con, shipment_id, clock)
         con.commit()
         return result.model_dump()
 
@@ -104,29 +108,66 @@ def record_driver_constraint(
 
 
 @tool
-def find_feasible_slots(shipment_id: str, earliest_ts: str | None = None) -> dict:
-    """Find available dock slots for a shipment after its declared ETA. Never holds capacity."""
+def find_feasible_slots(
+    shipment_id: str,
+    earliest_ts: str | None = None,
+    trigger_reason: Literal["DOCK_FAULT"] | None = None,
+) -> dict:
+    """Find available dock slots for a shipment after its declared ETA.
+    Never holds capacity. Call this once per driver request — the options
+    it returns are remembered server-side (agent_actions), so hold_slot can
+    be called later with just the option number the driver picks. Never
+    call this again just to re-fetch options you already showed; only call
+    it again for a genuinely new search (e.g. a new declared ETA, or after
+    releasing a hold to start over).
+
+    Pass trigger_reason="DOCK_FAULT" whenever the driver's stated reason for
+    needing a new slot is that their assigned dock is broken, down, or
+    unavailable. This is required, not optional, for that case: the tool
+    verifies the claim against actual dock events before searching, and
+    rejects with UNVERIFIED_DOCK_FAULT if none exist — you don't decide
+    whether the claim is true, the data does."""
     driver_id, _ = _session()
     with db.get_conn() as con:
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "find_feasible_slots", {"shipment_id": shipment_id})
         clock = get_clock(con)
-    result = find_feasible_slots_impl(shipment_id, earliest_ts, clock)
+    result = find_feasible_slots_impl(shipment_id, earliest_ts, clock, trigger_reason)
+    with db.get_conn() as con:
+        log_action(
+            con,
+            f"FFS-{uuid.uuid4().hex[:12]}",
+            "find_feasible_slots",
+            {"shipment_id": shipment_id, "earliest_ts": earliest_ts, "trigger_reason": trigger_reason},
+            result,
+            "REJECTED" if result.status == "rejected" else "SUCCESS",
+        )
+        con.commit()
     return result.model_dump()
 
 
 @tool
-def hold_slot(option_token: str) -> dict:
-    """Place a soft hold on a specific option returned by find_feasible_slots."""
+def hold_slot(shipment_id: str, option_number: int) -> dict:
+    """Place a soft hold on one of the options find_feasible_slots most
+    recently returned for this shipment. option_number is the 1, 2, or 3
+    the driver picked, matching the numbered list you showed them — never
+    pass a token, and never call find_feasible_slots again just to get one;
+    the option is looked up here from the earlier search."""
     driver_id, _ = _session()
     with db.get_conn() as con:
-        clock = get_clock(con)
-        # shipment_id is embedded in the (unverified) token payload; extract
-        # it first so an ownership violation is logged even for a forged or
-        # tampered token, before spending a signature check on it.
-        shipment_id = json.loads(option_token).get("shipment_id", "")
         if not dc.owns_shipment(con, shipment_id, driver_id):
             return _reject_ownership(con, driver_id, "hold_slot", {"shipment_id": shipment_id})
+
+        clock = get_clock(con)
+        option_token = resolve_offered_option(con, shipment_id, option_number)
+        if option_token is None:
+            result = Rejected(
+                status="rejected",
+                reason="NO_ACTIVE_OPTIONS",
+                detail="I don't have those options anymore — call find_feasible_slots again.",
+            )
+            con.commit()
+            return result.model_dump()
 
         token = verify_option_token(con, option_token, shipment_id)
         if token is None:

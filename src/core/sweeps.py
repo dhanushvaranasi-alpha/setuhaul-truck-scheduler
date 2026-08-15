@@ -11,7 +11,6 @@ from .feasibility import (
     evaluate_span,
     get_shipment_context,
 )
-from .notifications import notify_warehouse
 
 # --------------------------------------------------------------------------
 # Four cron sweeps (§14 / RUNBOOK Step 14). Each opens its own connection —
@@ -21,27 +20,51 @@ from .notifications import notify_warehouse
 
 
 def _notify_driver(con, shipment_id: str, text: str, clock: Clock) -> None:
-    thread_row = con.execute(
-        "SELECT thread_id FROM chat_threads WHERE shipment_id = %s ORDER BY opened_at DESC LIMIT 1",
-        (shipment_id,),
-    ).fetchone()
-    if thread_row is None:
-        return
+    thread_id = _thread_for_shipment(con, shipment_id, clock)
     con.execute(
         """
         INSERT INTO chat_messages (chat_message_id, thread_id, sender_type, sender_reference, message_text, message_ts)
         VALUES (%s, %s, 'AGENT', 'agent', %s, %s)
         """,
-        (f"MSG-{uuid.uuid4().hex[:12]}", thread_row[0], text, clock.now()),
+        (f"MSG-{uuid.uuid4().hex[:12]}", thread_id, text, clock.now()),
     )
 
 
-def _thread_for_shipment(con, shipment_id: str) -> str | None:
+def _thread_for_shipment(con, shipment_id: str, clock: Clock) -> str:
+    """Find the shipment driver's most recent chat thread, or open one on
+    the fly. Looked up via the shipment's driver_id, not chat_threads.
+    shipment_id — the live agent flow (agent.py's _ensure_chat_thread) never
+    sets that column, so a lookup keyed on it silently finds nothing for any
+    thread that started from a real driver conversation. A sweep-driven
+    event (expiry, escalation) has no chat message of its own to piggyback
+    on, so it must be able to open a thread rather than skip the driver
+    notification/escalation when the driver hasn't texted yet today."""
     row = con.execute(
-        "SELECT thread_id FROM chat_threads WHERE shipment_id = %s ORDER BY opened_at DESC LIMIT 1",
+        """
+        SELECT ct.thread_id
+        FROM chat_threads ct
+        JOIN shipments s ON s.driver_id = ct.driver_id
+        WHERE s.shipment_id = %s
+        ORDER BY ct.opened_at DESC LIMIT 1
+        """,
         (shipment_id,),
     ).fetchone()
-    return row[0] if row else None
+    if row:
+        return row[0]
+
+    driver_id = con.execute(
+        "SELECT driver_id FROM shipments WHERE shipment_id = %s", (shipment_id,)
+    ).fetchone()[0]
+    thread_id = f"SWEEP-{shipment_id}"
+    con.execute(
+        """
+        INSERT INTO chat_threads (thread_id, driver_id, shipment_id, opened_at, thread_status, thread_intent)
+        VALUES (%s, %s, %s, %s, 'OPEN', 'UNKNOWN')
+        ON CONFLICT (thread_id) DO NOTHING
+        """,
+        (thread_id, driver_id, shipment_id, clock.now()),
+    )
+    return thread_id
 
 
 def sweep_holds(clock: Clock) -> dict:
@@ -71,24 +94,29 @@ def sweep_holds(clock: Clock) -> dict:
 
 
 def sweep_pending_confirmations(clock: Clock) -> dict:
-    """§7's expiry/retry policy for PENDING_CONFIRMATION appointments. Does
-    NOT handle REPLIED — that's deliver_warehouse_replies's job, since only
-    the warehouse stub knows a reply landed."""
+    """§7's expiry policy for PENDING_CONFIRMATION appointments. A QUEUED or
+    FAILED notification never reached the warehouse, so nobody is going to
+    reply to it — that's treated as expired immediately, no retry, no wait.
+    A SENT/DELIVERED one gets a real window (delivered_expiry_minutes,
+    capped at pre_span_buffer_minutes before span_start) before being
+    treated as unconfirmed. Does NOT handle REPLIED — that's
+    deliver_warehouse_replies's job, since only the warehouse stub knows a
+    reply landed."""
     from .. import db
 
     policy = get_pending_confirmation_policy()
-    expired, retried, escalated = 0, 0, 0
+    expired = 0
 
     with db.get_conn() as con:
         rows = con.execute(
             """
-            SELECT appointment_id, shipment_id, booked_at, span_start_ts, dock_id
+            SELECT appointment_id, shipment_id, booked_at, span_start_ts
             FROM appointments
             WHERE appointment_status = 'PENDING_CONFIRMATION' AND is_current
             """
         ).fetchall()
 
-        for appointment_id, shipment_id, booked_at, span_start, dock_id in rows:
+        for appointment_id, shipment_id, booked_at, span_start in rows:
             msg_row = con.execute(
                 """
                 SELECT delivery_status, sent_at FROM operational_messages
@@ -98,51 +126,21 @@ def sweep_pending_confirmations(clock: Clock) -> dict:
             ).fetchone()
             if msg_row is None:
                 continue
-            delivery_status, sent_at = msg_row
+            delivery_status, _sent_at = msg_row
 
-            now = clock.now()
-            cap = span_start - timedelta(minutes=policy.pre_span_buffer_minutes)
-
-            if delivery_status in ("DELIVERED", "SENT"):
-                expiry = min(booked_at + timedelta(minutes=policy.delivered_expiry_minutes), cap)
-                if now >= expiry:
-                    _expire_pending(con, appointment_id, shipment_id, clock)
-                    expired += 1
-                continue
-
-            is_failed = delivery_status == "FAILED"
-            is_stuck = delivery_status == "QUEUED" and (
-                now - sent_at
-            ).total_seconds() > policy.queued_timeout_seconds
-            if not (is_failed or is_stuck):
-                continue
-
-            if now >= cap:
+            if delivery_status in ("QUEUED", "FAILED"):
                 _expire_pending(con, appointment_id, shipment_id, clock)
                 expired += 1
                 continue
 
-            attempts_so_far = con.execute(
-                "SELECT count(*) FROM operational_messages WHERE appointment_id = %s", (appointment_id,)
-            ).fetchone()[0]
-            if attempts_so_far <= policy.retry_attempts:
-                next_channel = policy.channel_ladder[min(attempts_so_far, len(policy.channel_ladder) - 1)]
-                notify_warehouse(con, appointment_id, shipment_id, dock_id, clock, channel=next_channel)
-                retried += 1
-            else:
-                thread_id = _thread_for_shipment(con, shipment_id)
-                if thread_id:
-                    escalate_to_human(
-                        con,
-                        thread_id,
-                        "NOTIFICATION_FAILED",
-                        {"appointment_id": appointment_id},
-                        clock,
-                    )
-                    escalated += 1
+            cap = span_start - timedelta(minutes=policy.pre_span_buffer_minutes)
+            expiry = min(booked_at + timedelta(minutes=policy.delivered_expiry_minutes), cap)
+            if clock.now() >= expiry:
+                _expire_pending(con, appointment_id, shipment_id, clock)
+                expired += 1
 
         con.commit()
-    return {"expired": expired, "retried": retried, "escalated": escalated}
+    return {"expired": expired}
 
 
 def _expire_pending(con, appointment_id: str, shipment_id: str, clock: Clock) -> None:
@@ -155,9 +153,8 @@ def _expire_pending(con, appointment_id: str, shipment_id: str, clock: Clock) ->
         """,
         (clock.now(), clock.now(), appointment_id),
     )
-    thread_id = _thread_for_shipment(con, shipment_id)
-    if thread_id:
-        escalate_to_human(con, thread_id, "PENDING_EXPIRED", {"appointment_id": appointment_id}, clock)
+    thread_id = _thread_for_shipment(con, shipment_id, clock)
+    escalate_to_human(con, thread_id, "PENDING_EXPIRED", {"appointment_id": appointment_id}, clock)
     _notify_driver(
         con,
         shipment_id,
@@ -266,22 +263,28 @@ def deliver_warehouse_replies(clock: Clock) -> dict:
                 ).fetchall()
             ]
             dock_row = con.execute(
-                "SELECT dock_code, dock_type FROM docks WHERE dock_id = %s", (dock_id,)
+                "SELECT dock_code, dock_type, supports_refrigerated, max_vehicle_weight_kg FROM docks WHERE dock_id = %s",
+                (dock_id,),
             ).fetchone()
             ctx = get_shipment_context(con, shipment_id)
             span = SpanCandidate(
-                dock=DockCandidate(dock_id=dock_id, dock_code=dock_row[0], dock_type=dock_row[1]),
+                dock=DockCandidate(
+                    dock_id=dock_id,
+                    dock_code=dock_row[0],
+                    dock_type=dock_row[1],
+                    supports_refrigerated=dock_row[2],
+                    max_vehicle_weight_kg=dock_row[3],
+                ),
                 slot_ids=slot_ids,
                 span_start=span_start,
                 span_end=span_end,
             )
             if evaluate_span(con, ctx, span, clock, exclude_appointment_id=appointment_id):
-                thread_id = _thread_for_shipment(con, shipment_id)
-                if thread_id:
-                    escalate_to_human(
-                        con, thread_id, "CONTRADICTORY_STATE", {"appointment_id": appointment_id}, clock
-                    )
-                    escalated += 1
+                thread_id = _thread_for_shipment(con, shipment_id, clock)
+                escalate_to_human(
+                    con, thread_id, "CONTRADICTORY_STATE", {"appointment_id": appointment_id}, clock
+                )
+                escalated += 1
                 continue
 
             con.execute(
